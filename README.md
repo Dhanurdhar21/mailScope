@@ -2,31 +2,43 @@
 
 ![MailScope Brand](public/mailscope-icon.svg)
 
-> **MailScope** is a production-quality SaaS web application engineered to inspect email address deliverability evidence through deterministic RFC syntax validation, authoritative DNS resolution, and mail exchange (MX) record routing analysis—**without sending intrusive test emails**.
+> **MailScope** is a production-grade SaaS web application and API service engineered to inspect email address deliverability evidence through deterministic RFC syntax validation, authoritative asynchronous DNS resolution, and mail exchange (MX) record routing analysis—**without sending intrusive test emails**.
 
-Developed as a showcase frontend engineering, SaaS UI/UX architecture, and accessibility project.
+Developed as a showcase frontend engineering, backend API architecture, and accessibility project.
 
 ---
 
 ## 🌟 Key Capabilities & Architectural Highlights
 
-### 1. Truthful 6-Stage Processing Pipeline
-Unlike simplistic checkers that fabricate progress or binary "valid/invalid" verdicts, MailScope visualizes the actual technical pipeline:
+### 1. High-Performance Asynchronous Backend (FastAPI + dnspython)
+- **Non-Blocking Async Resolution**: Uses `dns.asyncresolver.Resolver` with `asyncio.gather()` and an `asyncio.Semaphore` (max 25 concurrent lookups) to prevent socket exhaustion and keep the event loop responsive.
+- **Batch-Level Domain Caching**: Addresses sharing the same domain within a batch (e.g., 50 addresses at `@example.com`) query DNS only once, dramatically reducing latency and network traffic.
+- **RFC 7505 Null MX Detection**: Explicitly identifies domains publishing a Null MX (`.`) to advertise that they refuse all incoming mail, accurately classifying them as `likely_to_bounce`.
+- **RFC 5321 Fallback Routing**: When no dedicated MX records exist, automatically evaluates A and AAAA host address records for implicit mail routing viability.
+- **Deterministic Outcome Classification**: Distinguishes confirmed `NXDOMAIN` and empty routing from DNS timeouts and temporary `SERVFAIL`/`NoNameservers` conditions (classified truthfully as `unknown` rather than false hard bounces).
+
+### 2. Comprehensive RFC 5321 / 5322 Syntax Validator
+- Replaces naive regular expressions with a structured validator:
+  - Enforces RFC 5321 length limits: total address &le; 254 chars, local-part &le; 64 chars, domain &le; 253 chars, domain labels &le; 63 chars.
+  - Detects dot-atom violations: leading dots, trailing dots, and consecutive dots (`..`).
+  - Supports RFC 5322 printable characters and plus-addressing (`user+tag@domain.com`).
+  - Supports Internationalized Domain Names (IDN/Punycode) via RFC 5891 IDNA encoding (`kontakt@münchen.de` &rarr; `kontakt@xn--mnchen-3ya.de`).
+
+### 3. Truthful 6-Stage Processing Pipeline
 - **Stage 1 — Input Received**: Normalizes multi-delimiter entries (newlines, commas, semicolons, spaces) and deduplicates targets.
-- **Stage 2 — Syntax Analysis**: Strict RFC 5322 validation across local-part, `@` delimiter, and domain structure.
+- **Stage 2 — Syntax Analysis**: Strict RFC validation and local-part constraint inspection.
 - **Stage 3 — Domain Lookup**: Verifies authoritative DNS registration, detecting `NXDOMAIN` and network timeouts.
 - **Stage 4 — Mail Routing Analysis**: Queries and sorts active MX records by preference, evaluating RFC 5321 A/AAAA fallback routing when MX records are absent.
 - **Stage 5 — Classification**: Synthesizes network evidence into clear confidence states with transparent reasoning.
 - **Stage 6 — Results Ready**: Displays interactive metrics, search/filtering, detailed drawer inspections, and CSV export.
 
-### 2. Transparent Deliverability Taxonomy
-MailScope avoids misleading "100% verified" claims:
+### 4. Transparent Deliverability Taxonomy
 - **`LIKELY TO BE DELIVERED`**: Syntax is valid and active MX servers are responding. *(Note: Mailbox existence cannot be guaranteed without real message transmission).*
-- **`LIKELY TO BOUNCE`**: Definitive delivery problem identified (malformed RFC 5322 syntax or confirmed `NXDOMAIN`).
-- **`UNKNOWN / FALLBACK`**: Insufficient or ambiguous evidence (DNS timeouts, server errors, or fallback A/AAAA routing without dedicated MX).
+- **`LIKELY TO BOUNCE`**: Definitive delivery problem identified (malformed RFC syntax, confirmed `NXDOMAIN`, RFC 7505 Null MX, or confirmed domain with no routing records).
+- **`UNKNOWN / FALLBACK`**: Insufficient or ambiguous evidence (DNS timeouts, temporary server errors, or fallback A/AAAA routing without dedicated MX).
 
-### 3. Production-Grade SaaS Interface & Design System
-- **Restrained Light Theme**: Built using clean SaaS standards (`#F7F8FA` background, `#FFFFFF` surfaces, `#182230` primary text, `#315EFB` developer blue accent, `#E4E7EC` borders).
+### 5. Production-Grade SaaS Interface & Design System
+- **Restrained Light Theme**: Built using clean SaaS standards (`#F7F8FA` background, `#FFFFFF` surfaces, `#182230` primary text, `#667085` secondary text, `#315EFB` developer blue accent, `#E4E7EC` borders).
 - **Accessible Indicators**: Statuses are never conveyed by color alone—distinct SVG icons, clear textual badges, and WCAG AA contrast standards are strictly enforced.
 - **Real-Time Backend Health Monitoring**: Live ping against `GET /health` displays connection status with automatic retry and service metadata.
 - **Secure CSV Export**: Full CSV generation with formula injection protection (CWE-1236 mitigation) escaping dangerous formula prefixes (`=`, `+`, `-`, `@`, `\t`, `\r`).
@@ -37,14 +49,15 @@ MailScope avoids misleading "100% verified" claims:
 
 | Layer | Technology |
 |---|---|
-| **Framework** | React 19 + TypeScript (Strict Mode) |
-| **Build Tooling** | Vite 8 + `@tailwindcss/vite` |
+| **Backend API** | [FastAPI](https://fastapi.tiangolo.com) + [Uvicorn](https://www.uvicorn.org) |
+| **DNS Engine** | [dnspython](https://www.dnspython.org) (`dns.asyncresolver`) |
+| **Data Validation** | [Pydantic v2](https://docs.pydantic.dev) + [idna](https://github.com/kjd/idna) |
+| **Backend Tests** | [pytest](https://docs.pytest.org) + [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) + [httpx](https://www.python-httpx.org) |
+| **Frontend Framework** | [React 19](https://react.dev) + [TypeScript](https://www.typescriptlang.org) (Strict Mode) |
+| **Build Tooling** | [Vite 8](https://vite.dev) + [`@tailwindcss/vite`](https://tailwindcss.com) |
 | **Styling** | Tailwind CSS v4 + Vanilla CSS Design Tokens |
-| **Routing** | React Router v7 (`/`, `/dashboard`, `*` 404) |
-| **Icons** | Lucide React |
-| **Typography** | Inter & JetBrains Mono (Google Fonts) |
-| **Backend Integration** | Native Fetch API with `AbortController` request cancellation |
-| **Companion Backend** | FastAPI + Python `dnspython` + `uvicorn` |
+| **Routing** | [React Router v7](https://reactrouter.com) (`/`, `/dashboard`, `*` 404) |
+| **Icons & Fonts** | [Lucide React](https://lucide.dev) + Inter & JetBrains Mono |
 
 ---
 
@@ -53,43 +66,33 @@ MailScope avoids misleading "100% verified" claims:
 ```
 smtp/
 ├── backend/
-│   ├── main.py              # FastAPI deliverability analysis API (DNS, MX, RFC parsing)
-│   └── requirements.txt     # Python dependencies (fastapi, uvicorn, dnspython, pydantic)
+│   ├── config.py            # Environment settings (CORS, timeouts, batch limits)
+│   ├── dns_checker.py       # Async DNS resolver, RFC 7505 Null MX, A/AAAA fallback, caching
+│   ├── main.py              # FastAPI application, lifecycle, health & analyze endpoints
+│   ├── models.py            # Pydantic request/response schemas matching frontend types
+│   ├── requirements.txt     # Python runtime & testing dependencies
+│   └── syntax.py            # RFC 5321/5322 syntax validation, length rules, IDNA support
 ├── public/
 │   ├── mailscope-icon.svg   # Custom SVG brand icon
 │   └── favicon.svg          # Favicon
 ├── src/
-│   ├── components/
-│   │   ├── Button.tsx             # Accessible button with variants & loading state
-│   │   ├── EmailInput.tsx         # Multiline input, sample loader, live counter
-│   │   ├── EmptyState.tsx         # Clean zero-result & search miss states
-│   │   ├── Footer.tsx             # Brand footer with technical disclaimer
-│   │   ├── Navbar.tsx             # Responsive navbar with mobile drawer
-│   │   ├── ProcessingTimeline.tsx # Truthful 6-stage animated pipeline
-│   │   ├── ResultDetails.tsx      # Comprehensive modal/drawer for DNS evidence
-│   │   ├── ResultsFilters.tsx     # Classification tabs & search bar
-│   │   ├── ResultsTable.tsx       # Responsive SaaS data table
-│   │   ├── StatusBadge.tsx        # High-contrast accessible status badges
-│   │   ├── SummaryCard.tsx        # Metric summary cards with percentage shares
-│   │   └── Toast.tsx              # ARIA live notification toasts
-│   ├── hooks/
-│   │   ├── useAnalysis.ts         # Pipeline state, filters, results coordinator
-│   │   └── useBackendHealth.ts    # Live health check hook with auto-retry
-│   ├── pages/
-│   │   ├── DashboardPage.tsx      # Main analysis workspace
-│   │   ├── LandingPage.tsx        # Conversion-focused SaaS landing page
-│   │   └── NotFoundPage.tsx       # 404 error page
-│   ├── services/
-│   │   ├── api.ts                 # Fetch client, response adapter, error handling
-│   │   ├── csvExport.ts           # RFC 4180 CSV builder with formula sanitization
-│   │   └── emailParser.ts         # Delimiter parser, deduplicator, sample sets
-│   ├── types/
-│   │   └── analysis.ts            # Strongly-typed models & interfaces
-│   ├── App.tsx                    # Route definitions and layout wrapper
-│   ├── index.css                  # Tailwind CSS theme & tokens
-│   └── main.tsx                   # Application entry point
-├── .env                           # Environment configuration
-├── .env.example                   # Environment configuration template
+│   ├── components/          # Reusable UI components (Button, ResultsTable, Modal, etc.)
+│   ├── hooks/               # Custom React hooks (useAnalysis, useBackendHealth)
+│   ├── pages/               # LandingPage, DashboardPage, NotFoundPage
+│   ├── services/            # API client, CSV exporter, email input parser
+│   ├── types/               # TypeScript interfaces (models, statuses, responses)
+│   ├── App.tsx              # Router configuration
+│   ├── index.css            # Tailwind CSS theme & tokens
+│   └── main.tsx             # Frontend entry point
+├── tests/
+│   ├── conftest.py          # Pytest setup and path configuration
+│   ├── test_api.py          # API endpoint tests (health, analyze, CORS, limits, errors)
+│   ├── test_dns.py          # Deterministic unit tests with mocked DNS responses
+│   ├── test_integration_dns.py # Live DNS integration tests
+│   └── test_syntax.py       # Comprehensive syntax unit tests
+├── .env                     # Local environment configuration
+├── .env.example             # Environment configuration template
+├── pytest.ini               # Pytest configuration
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
@@ -101,41 +104,45 @@ smtp/
 
 ### Prerequisites
 - **Node.js**: v18.0.0 or higher (v22+ recommended)
-- **Python**: v3.10+ (for running the companion FastAPI backend)
+- **Python**: v3.10+ (v3.12/v3.14 recommended)
 
-### Step 1: Install Frontend Dependencies
+### Step 1: Install Python Dependencies
 ```bash
-npm install
+python -m pip install -r backend/requirements.txt
 ```
 
 ### Step 2: Start the FastAPI Backend
+```bash
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+```
+*The backend starts on `http://127.0.0.1:8000` with interactive Swagger docs at `http://127.0.0.1:8000/docs`.*
+
+### Step 3: Start the Frontend Dev Server
 In a separate terminal:
 ```bash
-python -m pip install -r backend/requirements.txt
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-```
-*The backend exposes `GET /health` and `POST /api/analyze` with CORS enabled.*
-
-### Step 3: Start the Vite Dev Server
-```bash
+npm install
 npm run dev
 ```
 Open **`http://127.0.0.1:5173`** in your browser.
 
 ---
 
-## ⚙️ Environment Configuration
+## 🧪 Running the Backend Test Suite
 
-Configure the backend API URL using the `VITE_API_BASE_URL` environment variable in `.env`:
+The test suite runs 28 deterministic unit and integration tests covering syntax rules, mocked DNS edge cases (Null MX, timeouts, fallback), API status codes, and schema compatibility:
 
-```env
-# MailScope API Endpoint
-VITE_API_BASE_URL=http://localhost:8000
+```bash
+python -m pytest -v
+```
+
+To run only the deterministic unit tests:
+```bash
+python -m pytest -m "not integration" -v
 ```
 
 ---
 
-## 📡 Backend API Contract
+## 📡 API Reference & Contract
 
 ### 1. Health Check
 `GET /health`
@@ -144,6 +151,7 @@ VITE_API_BASE_URL=http://localhost:8000
   "status": "ok",
   "service": "mailscope-analyzer",
   "version": "1.0.0",
+  "timestamp": 1793037584.11652,
   "dns_resolver": "active"
 }
 ```
@@ -156,8 +164,9 @@ VITE_API_BASE_URL=http://localhost:8000
 {
   "emails": [
     "contact@google.com",
-    "invalid-format",
-    "user@nonexistentdomain12345xyz.com"
+    "bad..syntax@com",
+    "user+tag@github.com",
+    "test@nonexistentdomain-xyz-404-check.com"
   ]
 }
 ```
@@ -174,37 +183,42 @@ VITE_API_BASE_URL=http://localhost:8000
       "domain_status": "resolved",
       "mx_status": "present",
       "classification": "likely_to_be_delivered",
-      "reason": "Domain resolves with 1 active MX record(s). Delivery route is technically configured.",
+      "reason": "Domain 'google.com' resolves with 1 active MX record(s). Mail routing is technically configured.",
       "diagnostics": {
         "has_mx": true,
         "has_fallback_a": false,
         "mx_records": ["smtp.google.com (priority: 10)"],
         "is_disposable": false,
         "syntax_error": null,
-        "response_time_ms": 204.33
+        "response_time_ms": 27.65
       }
     }
   ],
   "summary": {
-    "total": 1,
-    "likely_to_be_delivered": 1,
-    "likely_to_bounce": 0,
+    "total": 4,
+    "likely_to_be_delivered": 2,
+    "likely_to_bounce": 2,
     "unknown": 0,
-    "duration_ms": 204.33
+    "duration_ms": 115.42
   }
 }
 ```
 
 ---
 
-## 🧪 Quality & Production Verification
+## 🌐 Production Deployment Guide (e.g., Render, Railway)
 
-- **Production Build**: Verified with `npm run build` (`tsc -b && vite build` completes in <700ms).
-- **Linter**: Passed with `npm run lint` (0 errors, 0 warnings).
-- **Automated E2E Browser Testing**: Validated landing page navigation, real DNS inspection, live filtering, inspection modal, and CSV export.
+### Backend Deployment (Render Web Service)
+- **Environment**: Python 3
+- **Build Command**: `pip install -r backend/requirements.txt`
+- **Start Command**: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+- **Environment Variables**:
+  - `CORS_ORIGINS`: Comma-separated list of allowed frontend origins (e.g., `https://mailscope.vercel.app`)
+  - `DNS_TIMEOUT_SECONDS`: `2.5`
+  - `MAX_EMAIL_BATCH_SIZE`: `200`
 
----
-
-## 🛡️ Security & Privacy Notice
-- **Non-intrusive**: MailScope executes strictly read-only DNS queries. It never sends test emails, SMTP `VRFY` commands, or ping packets to recipient inboxes.
-- **Injection Protection**: Exported CSV files strictly sanitize formula injection vulnerabilities (`=`, `@`, `+`, `-`).
+### Frontend Deployment (Vercel, Netlify, Render Static Site)
+- **Build Command**: `npm run build`
+- **Publish Directory**: `dist`
+- **Environment Variables**:
+  - `VITE_API_BASE_URL`: URL of your deployed backend service (e.g., `https://mailscope-api.onrender.com`)

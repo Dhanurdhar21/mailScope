@@ -1,268 +1,213 @@
 """
 MailScope Backend - Professional Email Deliverability Analyzer API
-FastAPI service providing real DNS, MX, and RFC-compliant syntax analysis.
+FastAPI service providing async DNS, MX, RFC-compliant syntax analysis, and transparent deliverability classification.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
 import time
-import re
-import dns.resolver
-import dns.exception
+import asyncio
+from typing import Dict, List, Optional
+import dns.asyncresolver
+
+from backend.config import (
+    SERVICE_NAME,
+    VERSION,
+    CORS_ORIGINS,
+    MAX_CONCURRENT_DNS_LOOKUPS,
+    MAX_EMAIL_BATCH_SIZE
+)
+from backend.models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    BackendHealthResponse,
+    Diagnostics,
+    EmailAnalysisResult,
+    SummaryMetrics
+)
+from backend.syntax import validate_email_syntax
+from backend.dns_checker import (
+    DomainDnsResult,
+    create_resolver,
+    inspect_domain_cached
+)
+
+# Global resolver and concurrency semaphore
+_global_resolver: Optional[dns.asyncresolver.Resolver] = None
+_dns_semaphore: Optional[asyncio.Semaphore] = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initializes global DNS resolver and concurrency semaphore during app lifespan."""
+    global _global_resolver, _dns_semaphore
+    _global_resolver = create_resolver()
+    _dns_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DNS_LOOKUPS)
+    yield
+    _global_resolver = None
+    _dns_semaphore = None
 
 app = FastAPI(
     title="MailScope Email Deliverability Analyzer API",
-    version="1.0.0",
-    description="Analyzes email syntax, domain configuration, and mail-routing DNS evidence."
+    version=VERSION,
+    description="Inspects email syntax, domain DNS status, and mail routing without sending test emails.",
+    lifespan=lifespan
 )
 
-# Enable CORS for local development and SaaS hosting
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# RFC 5322 compliant regex for basic syntax validation
-EMAIL_REGEX = re.compile(
-    r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
-)
+def get_resolver() -> dns.asyncresolver.Resolver:
+    global _global_resolver
+    if _global_resolver is None:
+        _global_resolver = create_resolver()
+    return _global_resolver
 
-# Known disposable email providers for diagnostic insight
-DISPOSABLE_DOMAINS = {
-    "mailinator.com", "tempmail.com", "guerrillamail.com", "10minutemail.com",
-    "trashmail.com", "sharklasers.com", "dispostable.com", "yopmail.com"
-}
+def get_semaphore() -> asyncio.Semaphore:
+    global _dns_semaphore
+    if _dns_semaphore is None:
+        _dns_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DNS_LOOKUPS)
+    return _dns_semaphore
 
-class AnalyzeRequest(BaseModel):
-    emails: List[str] = Field(..., max_items=200, description="List of email addresses to analyze (max 200)")
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Formats validation errors cleanly for frontend consumption."""
+    errors = exc.errors()
+    first_error = errors[0]["msg"] if errors else "Invalid request body."
+    return JSONResponse(
+        status_code=422,
+        content={"detail": f"Validation Error: {first_error}"}
+    )
 
-class Diagnostics(BaseModel):
-    has_mx: bool
-    has_fallback_a: bool
-    mx_records: List[str]
-    is_disposable: bool
-    syntax_error: Optional[str] = None
-    response_time_ms: float
+@app.get("/health", response_model=BackendHealthResponse)
+async def health_check():
+    """
+    Health check endpoint to verify backend service availability and DNS resolver operation.
+    Executes a real non-blocking verification of resolver readiness.
+    """
+    resolver = get_resolver()
+    dns_status = "active"
 
-class EmailAnalysisResult(BaseModel):
-    email: str
-    normalized_email: str
-    syntax_valid: bool
-    domain: str
-    domain_status: str  # resolved | nonexistent | timeout | no_mail_records | not_checked
-    mx_status: str      # present | none | fallback_a_record | timeout | not_checked
-    classification: str # likely_to_be_delivered | likely_to_bounce | unknown
-    reason: str
-    diagnostics: Diagnostics
+    # Lightweight real verification of DNS resolver configuration
+    if not resolver.nameservers:
+        dns_status = "no_nameservers_configured"
 
-class SummaryMetrics(BaseModel):
-    total: int
-    likely_to_be_delivered: int
-    likely_to_bounce: int
-    unknown: int
-    duration_ms: float
+    return BackendHealthResponse(
+        status="ok",
+        service=SERVICE_NAME,
+        version=VERSION,
+        timestamp=time.time(),
+        dns_resolver=dns_status
+    )
 
-class AnalyzeResponse(BaseModel):
-    results: List[EmailAnalysisResult]
-    summary: SummaryMetrics
-
-@app.get("/health")
-def health_check():
-    """Health check endpoint to verify backend availability."""
-    return {
-        "status": "ok",
-        "service": "mailscope-analyzer",
-        "version": "1.0.0",
-        "timestamp": time.time(),
-        "dns_resolver": "active"
-    }
-
-def analyze_single_email(raw_email: str) -> EmailAnalysisResult:
+async def _process_single_email(
+    raw_email: str,
+    resolver: dns.asyncresolver.Resolver,
+    domain_cache: Dict[str, DomainDnsResult],
+    semaphore: asyncio.Semaphore
+) -> EmailAnalysisResult:
+    """Processes a single email: syntax check followed by async DNS inspection."""
     start_time = time.time()
-    clean_email = raw_email.strip()
 
-    # 1. Syntax check
-    if not clean_email:
+    # Step 1: RFC 5321 / 5322 Syntax Check
+    syntax_res = validate_email_syntax(raw_email)
+
+    if not syntax_res.is_valid:
         duration_ms = round((time.time() - start_time) * 1000, 2)
         return EmailAnalysisResult(
             email=raw_email,
-            normalized_email="",
+            normalized_email=syntax_res.normalized_email,
             syntax_valid=False,
-            domain="",
+            domain=syntax_res.domain,
             domain_status="not_checked",
             mx_status="not_checked",
             classification="likely_to_bounce",
-            reason="Empty email string provided.",
+            reason=f"Syntax validation failed: {syntax_res.error_reason}",
             diagnostics=Diagnostics(
                 has_mx=False,
                 has_fallback_a=False,
                 mx_records=[],
                 is_disposable=False,
-                syntax_error="Empty address",
+                syntax_error=syntax_res.error_reason,
                 response_time_ms=duration_ms
             )
         )
 
-    # Check for basic length constraints
-    if len(clean_email) > 254:
-        duration_ms = round((time.time() - start_time) * 1000, 2)
-        return EmailAnalysisResult(
-            email=raw_email,
-            normalized_email=clean_email,
-            syntax_valid=False,
-            domain="",
-            domain_status="not_checked",
-            mx_status="not_checked",
-            classification="likely_to_bounce",
-            reason="Email exceeds maximum RFC 5321 length of 254 characters.",
-            diagnostics=Diagnostics(
-                has_mx=False,
-                has_fallback_a=False,
-                mx_records=[],
-                is_disposable=False,
-                syntax_error="Address length > 254 characters",
-                response_time_ms=duration_ms
-            )
-        )
+    # Step 2: Domain DNS & MX Inspection (Cached per domain within batch)
+    dns_res = await inspect_domain_cached(
+        syntax_res.ascii_domain,
+        resolver,
+        domain_cache,
+        semaphore
+    )
 
-    if not EMAIL_REGEX.match(clean_email):
-        duration_ms = round((time.time() - start_time) * 1000, 2)
-        return EmailAnalysisResult(
-            email=raw_email,
-            normalized_email=clean_email,
-            syntax_valid=False,
-            domain=clean_email.split("@")[-1] if "@" in clean_email else "",
-            domain_status="not_checked",
-            mx_status="not_checked",
-            classification="likely_to_bounce",
-            reason="Address does not conform to standard RFC 5322 email syntax rules.",
-            diagnostics=Diagnostics(
-                has_mx=False,
-                has_fallback_a=False,
-                mx_records=[],
-                is_disposable=False,
-                syntax_error="Failed RFC 5322 regex validation",
-                response_time_ms=duration_ms
-            )
-        )
-
-    # Extract domain
-    parts = clean_email.split("@")
-    domain = parts[1].lower()
-    is_disposable = domain in DISPOSABLE_DOMAINS
-
-    # 2. DNS & MX Lookup
-    resolver = dns.resolver.Resolver()
-    resolver.timeout = 2.5
-    resolver.lifetime = 2.5
-
-    mx_records = []
-    has_mx = False
-    has_fallback_a = False
-    domain_status = "resolved"
-    mx_status = "none"
-    classification = "unknown"
-    reason = ""
-
-    # Check MX records
-    try:
-        mx_answers = resolver.resolve(domain, 'MX')
-        # Sort by preference
-        sorted_answers = sorted(mx_answers, key=lambda rdata: rdata.preference)
-        for rdata in sorted_answers:
-            exchange = str(rdata.exchange).rstrip('.')
-            mx_records.append(f"{exchange} (priority: {rdata.preference})")
-        
-        if mx_records:
-            has_mx = True
-            mx_status = "present"
-            domain_status = "resolved"
-            classification = "likely_to_be_delivered"
-            reason = f"Domain resolves with {len(mx_records)} active MX record(s). Delivery route is technically configured."
-    except dns.resolver.NXDOMAIN:
-        domain_status = "nonexistent"
-        mx_status = "none"
-        classification = "likely_to_bounce"
-        reason = f"Domain '{domain}' does not exist in DNS (NXDOMAIN)."
-    except (dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-        # MX record not present, check for RFC 5321 fallback A / AAAA records
-        has_mx = False
-        try:
-            a_answers = resolver.resolve(domain, 'A')
-            if a_answers:
-                has_fallback_a = True
-                domain_status = "resolved"
-                mx_status = "fallback_a_record"
-                classification = "unknown"
-                reason = "No MX records found, but domain has A records. RFC 5321 fallback routing may apply; delivery is uncertain."
-        except Exception:
-            try:
-                aaaa_answers = resolver.resolve(domain, 'AAAA')
-                if aaaa_answers:
-                    has_fallback_a = True
-                    domain_status = "resolved"
-                    mx_status = "fallback_a_record"
-                    classification = "unknown"
-                    reason = "No MX records found, but domain has AAAA records. RFC 5321 fallback routing may apply; delivery is uncertain."
-                else:
-                    domain_status = "no_mail_records"
-                    mx_status = "none"
-                    classification = "likely_to_bounce"
-                    reason = f"Domain '{domain}' exists but has no MX or fallback A/AAAA routing records."
-            except Exception:
-                domain_status = "no_mail_records"
-                mx_status = "none"
-                classification = "likely_to_bounce"
-                reason = f"Domain '{domain}' exists but has no MX or fallback A/AAAA routing records."
-    except dns.exception.Timeout:
-        domain_status = "timeout"
-        mx_status = "timeout"
-        classification = "unknown"
-        reason = f"DNS lookup for domain '{domain}' timed out. Cannot confirm status without live nameserver response."
-    except Exception as e:
-        domain_status = "unknown"
-        mx_status = "unknown"
-        classification = "unknown"
-        reason = f"DNS query failed with error: {str(e)}"
-
-    if is_disposable:
+    reason = dns_res.reason
+    if syntax_res.is_disposable:
         reason += " [Notice: Domain is recognized as a temporary/disposable email provider]."
 
+    # Overall analysis time for this address
     duration_ms = round((time.time() - start_time) * 1000, 2)
 
     return EmailAnalysisResult(
-        email=clean_email,
-        normalized_email=clean_email.lower(),
+        email=raw_email,
+        normalized_email=syntax_res.normalized_email,
         syntax_valid=True,
-        domain=domain,
-        domain_status=domain_status,
-        mx_status=mx_status,
-        classification=classification,
+        domain=syntax_res.domain,
+        domain_status=dns_res.domain_status,
+        mx_status=dns_res.mx_status,
+        classification=dns_res.classification,
         reason=reason,
         diagnostics=Diagnostics(
-            has_mx=has_mx,
-            has_fallback_a=has_fallback_a,
-            mx_records=mx_records,
-            is_disposable=is_disposable,
+            has_mx=dns_res.has_mx,
+            has_fallback_a=dns_res.has_fallback_a,
+            mx_records=dns_res.mx_records,
+            is_disposable=syntax_res.is_disposable,
             syntax_error=None,
             response_time_ms=duration_ms
         )
     )
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
-def analyze_emails(payload: AnalyzeRequest):
-    """Analyzes a batch of email addresses for deliverability evidence."""
+async def analyze_emails(payload: AnalyzeRequest):
+    """
+    Analyzes a batch of email addresses for deliverability evidence.
+    Executes concurrent, non-blocking DNS lookups with batch-level domain caching.
+    """
     if not payload.emails:
-        raise HTTPException(status_code=400, detail="The emails list cannot be empty.")
-    
+        raise HTTPException(
+            status_code=400,
+            detail="The emails list cannot be empty."
+        )
+
+    if len(payload.emails) > MAX_EMAIL_BATCH_SIZE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Batch size of {len(payload.emails)} exceeds maximum allowed limit of {MAX_EMAIL_BATCH_SIZE}."
+        )
+
     start_batch = time.time()
-    results = [analyze_single_email(email) for email in payload.emails]
-    
+    resolver = get_resolver()
+    semaphore = get_semaphore()
+
+    # In-memory batch cache: prevents redundant DNS queries for identical domains
+    domain_cache: Dict[str, DomainDnsResult] = {}
+
+    # Schedule concurrent non-blocking tasks for all emails
+    tasks = [
+        _process_single_email(email, resolver, domain_cache, semaphore)
+        for email in payload.emails
+    ]
+    results = await asyncio.gather(*tasks)
+
+    # Aggregate metrics
     total = len(results)
     delivered = sum(1 for r in results if r.classification == "likely_to_be_delivered")
     bounced = sum(1 for r in results if r.classification == "likely_to_bounce")
@@ -282,4 +227,4 @@ def analyze_emails(payload: AnalyzeRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
