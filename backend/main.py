@@ -3,14 +3,15 @@ MailScope Backend - Professional Email Deliverability Analyzer API
 FastAPI service providing async DNS, MX, RFC-compliant syntax analysis, and transparent deliverability classification.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import time
 import asyncio
-from typing import Dict, List, Optional
+from typing import Optional
 import dns.asyncresolver
 
 from backend.config import (
@@ -18,7 +19,8 @@ from backend.config import (
     VERSION,
     CORS_ORIGINS,
     MAX_CONCURRENT_DNS_LOOKUPS,
-    MAX_EMAIL_BATCH_SIZE
+    MAX_EMAIL_BATCH_SIZE,
+    MAX_REQUEST_BODY_BYTES
 )
 from backend.models import (
     AnalyzeRequest,
@@ -30,9 +32,8 @@ from backend.models import (
 )
 from backend.syntax import validate_email_syntax
 from backend.dns_checker import (
-    DomainDnsResult,
     create_resolver,
-    inspect_domain_cached
+    BatchDomainResolver
 )
 
 # Global resolver and concurrency semaphore
@@ -56,11 +57,29 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS
+# Request size limiting middleware (CWE-400 resource exhaustion protection)
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                length_int = int(content_length)
+                if length_int > MAX_REQUEST_BODY_BYTES:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": f"Payload Too Large: Request body ({length_int} bytes) exceeds maximum limit of {MAX_REQUEST_BODY_BYTES} bytes."}
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
+
+app.add_middleware(RequestSizeLimitMiddleware)
+
+# Configure CORS safely: do not enable credentials when wildcard origin is configured
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=(CORS_ORIGINS != ["*"]),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -96,7 +115,7 @@ async def health_check():
     resolver = get_resolver()
     dns_status = "active"
 
-    # Lightweight real verification of DNS resolver configuration
+    # Verify DNS resolver nameserver readiness
     if not resolver.nameservers:
         dns_status = "no_nameservers_configured"
 
@@ -110,9 +129,7 @@ async def health_check():
 
 async def _process_single_email(
     raw_email: str,
-    resolver: dns.asyncresolver.Resolver,
-    domain_cache: Dict[str, DomainDnsResult],
-    semaphore: asyncio.Semaphore
+    batch_resolver: BatchDomainResolver
 ) -> EmailAnalysisResult:
     """Processes a single email: syntax check followed by async DNS inspection."""
     start_time = time.time()
@@ -123,7 +140,7 @@ async def _process_single_email(
     if not syntax_res.is_valid:
         duration_ms = round((time.time() - start_time) * 1000, 2)
         return EmailAnalysisResult(
-            email=raw_email,
+            email=str(raw_email),
             normalized_email=syntax_res.normalized_email,
             syntax_valid=False,
             domain=syntax_res.domain,
@@ -141,23 +158,18 @@ async def _process_single_email(
             )
         )
 
-    # Step 2: Domain DNS & MX Inspection (Cached per domain within batch)
-    dns_res = await inspect_domain_cached(
-        syntax_res.ascii_domain,
-        resolver,
-        domain_cache,
-        semaphore
-    )
+    # Step 2: Domain DNS & MX Inspection (Coalesced and cached per domain within batch)
+    dns_res = await batch_resolver.resolve(syntax_res.ascii_domain)
 
     reason = dns_res.reason
     if syntax_res.is_disposable:
         reason += " [Notice: Domain is recognized as a temporary/disposable email provider]."
 
-    # Overall analysis time for this address
+    # Overall analysis latency for this address
     duration_ms = round((time.time() - start_time) * 1000, 2)
 
     return EmailAnalysisResult(
-        email=raw_email,
+        email=str(raw_email),
         normalized_email=syntax_res.normalized_email,
         syntax_valid=True,
         domain=syntax_res.domain,
@@ -179,7 +191,7 @@ async def _process_single_email(
 async def analyze_emails(payload: AnalyzeRequest):
     """
     Analyzes a batch of email addresses for deliverability evidence.
-    Executes concurrent, non-blocking DNS lookups with batch-level domain caching.
+    Executes concurrent, non-blocking DNS lookups with in-flight domain query coalescing.
     """
     if not payload.emails:
         raise HTTPException(
@@ -197,12 +209,12 @@ async def analyze_emails(payload: AnalyzeRequest):
     resolver = get_resolver()
     semaphore = get_semaphore()
 
-    # In-memory batch cache: prevents redundant DNS queries for identical domains
-    domain_cache: Dict[str, DomainDnsResult] = {}
+    # BatchDomainResolver coalesces in-flight queries and prevents thundering herd
+    batch_resolver = BatchDomainResolver(resolver, semaphore)
 
     # Schedule concurrent non-blocking tasks for all emails
     tasks = [
-        _process_single_email(email, resolver, domain_cache, semaphore)
+        _process_single_email(email, batch_resolver)
         for email in payload.emails
     ]
     results = await asyncio.gather(*tasks)

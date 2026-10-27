@@ -122,3 +122,33 @@ class TestEmailSyntax:
         res = validate_email_syntax("regular@google.com")
         assert res.is_valid
         assert res.is_disposable is False
+
+    def test_null_bytes_and_control_characters(self):
+        # Null bytes
+        assert not validate_email_syntax("user\x00@example.com").is_valid
+        assert not validate_email_syntax("user@example\x00.com").is_valid
+
+        # Newlines and carriage returns (CRLF injection prevention)
+        assert not validate_email_syntax("user\r\n@example.com").is_valid
+        assert not validate_email_syntax("user@example.com\n").is_valid
+        assert not validate_email_syntax("user\t@example.com").is_valid
+
+    def test_non_string_types(self):
+        # Non-string input should be safely rejected without unhandled exceptions
+        assert not validate_email_syntax(None).is_valid
+        assert not validate_email_syntax(12345).is_valid
+        assert not validate_email_syntax(["user@example.com"]).is_valid
+        assert not validate_email_syntax({"email": "test@example.com"}).is_valid
+
+    def test_domain_label_hyphen_boundaries(self):
+        # Domain labels cannot start or end with a hyphen
+        assert not validate_email_syntax("user@-example.com").is_valid
+        assert not validate_email_syntax("user@example-.com").is_valid
+        # Mid-label hyphen is valid
+        assert validate_email_syntax("user@my-example.com").is_valid
+
+    def test_punycode_ascii_domains(self):
+        res = validate_email_syntax("test@xn--mnchen-3ya.de")
+        assert res.is_valid
+        assert res.ascii_domain == "xn--mnchen-3ya.de"
+

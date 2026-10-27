@@ -34,7 +34,7 @@ class TestApiEndpoints:
         emails = [f"user{i}@example.com" for i in range(200)]
         transport = ASGITransport(app=app)
 
-        with patch("backend.main.inspect_domain_cached") as mock_dns:
+        with patch("backend.main.BatchDomainResolver.resolve", new_callable=AsyncMock) as mock_dns:
             mock_res = MagicMock(
                 domain_status="resolved",
                 mx_status="present",
@@ -67,7 +67,7 @@ class TestApiEndpoints:
         emails = ["dup@example.com", "dup@example.com"]
         transport = ASGITransport(app=app)
 
-        with patch("backend.main.inspect_domain_cached") as mock_dns:
+        with patch("backend.main.BatchDomainResolver.resolve", new_callable=AsyncMock) as mock_dns:
             mock_res = MagicMock(
                 domain_status="resolved",
                 mx_status="present",
@@ -91,7 +91,7 @@ class TestApiEndpoints:
         emails = ["valid@good.com", "valid@broken.com"]
         transport = ASGITransport(app=app)
 
-        async def mock_inspect(domain, resolver, cache, sem):
+        async def mock_resolve(domain):
             if domain == "good.com":
                 return MagicMock(
                     domain_status="resolved",
@@ -115,7 +115,7 @@ class TestApiEndpoints:
                     response_time_ms=1.0
                 )
 
-        with patch("backend.main.inspect_domain_cached", side_effect=mock_inspect):
+        with patch("backend.main.BatchDomainResolver.resolve", side_effect=mock_resolve):
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 res = await client.post("/api/analyze", json={"emails": emails})
                 assert res.status_code == 200
@@ -141,7 +141,7 @@ class TestApiEndpoints:
         emails = ["contact@company.com", "bad-email"]
         transport = ASGITransport(app=app)
 
-        with patch("backend.main.inspect_domain_cached") as mock_dns:
+        with patch("backend.main.BatchDomainResolver.resolve", new_callable=AsyncMock) as mock_dns:
             mock_res = MagicMock(
                 domain_status="resolved",
                 mx_status="present",
@@ -201,3 +201,75 @@ class TestApiEndpoints:
             )
             assert res.status_code == 200
             assert "access-control-allow-origin" in res.headers
+
+    async def test_regression_oversized_payload_returns_413(self):
+        """
+        REGRESSION TEST (DEFECT-04 / CWE-400):
+        Verify RequestSizeLimitMiddleware rejects requests larger than MAX_REQUEST_BODY_BYTES (512KB)
+        with HTTP 413 Payload Too Large.
+        """
+        # Create a payload of 600KB
+        large_junk = "a" * (600 * 1024)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.post(
+                "/api/analyze",
+                headers={"Content-Type": "application/json"},
+                content=large_junk
+            )
+            assert res.status_code == 413
+            assert "exceeds maximum limit" in res.json()["detail"]
+
+    async def test_invalid_types_and_missing_keys_rejected(self):
+        """Verify invalid schema data structures return HTTP 422."""
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Missing emails field
+            res = await client.post("/api/analyze", json={})
+            assert res.status_code == 422
+
+            # String instead of array
+            res = await client.post("/api/analyze", json={"emails": "not-a-list"})
+            assert res.status_code == 422
+
+            # Null array
+            res = await client.post("/api/analyze", json={"emails": None})
+            assert res.status_code == 422
+
+            # Array with non-string items
+            res = await client.post("/api/analyze", json={"emails": [123, True, None]})
+            assert res.status_code == 422
+
+    async def test_summary_invariant_consistency(self):
+        """Verify total = delivered + bounce + unknown invariant holds."""
+        transport = ASGITransport(app=app)
+        emails = [
+            "valid@company.com",
+            "invalid-email-format",
+            "another@example.com"
+        ]
+
+        with patch("backend.main.BatchDomainResolver.resolve", new_callable=AsyncMock) as mock_resolve:
+            mock_resolve.return_value = MagicMock(
+                domain_status="resolved",
+                mx_status="present",
+                classification="likely_to_be_delivered",
+                reason="OK",
+                has_mx=True,
+                has_fallback_a=False,
+                mx_records=["mx.company.com (priority: 10)"],
+                response_time_ms=1.1
+            )
+
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                res = await client.post("/api/analyze", json={"emails": emails})
+                assert res.status_code == 200
+                data = res.json()
+                summary = data["summary"]
+                assert summary["total"] == len(data["results"])
+                assert summary["total"] == (
+                    summary["likely_to_be_delivered"] +
+                    summary["likely_to_bounce"] +
+                    summary["unknown"]
+                )
+

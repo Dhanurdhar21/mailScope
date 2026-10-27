@@ -154,6 +154,16 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
         </span>
       );
     }
+    if (status === 'timeout') {
+      return (
+        <span
+          className={`inline-flex items-center font-medium rounded-md bg-[#FFFAEB] text-[#B54708] border border-[#FEDF89] ${sizeClasses}`}
+        >
+          <Clock className="w-3 h-3 text-[#F79009] shrink-0" aria-hidden="true" />
+          <span>Timeout</span>
+        </span>
+      );
+    }
     return (
       <span
         className={`inline-flex items-center font-medium rounded-md bg-[#F2F4F7] text-[#475467] border border-[#E4E7EC] ${sizeClasses}`}

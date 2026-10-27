@@ -34,3 +34,20 @@ class TestLiveDnsIntegration:
         assert result.mx_status == "none"
         assert result.classification == "likely_to_bounce"
         assert result.has_mx is False
+
+    async def test_live_null_mx_2outlook(self):
+        """
+        Tests that 2outlook.com resolves through configured nameservers,
+        identifies the RFC 7505 Null MX record, and classifies as likely_to_bounce.
+        """
+        from backend.dns_checker import create_resolver
+        resolver = create_resolver()
+
+        result = await inspect_domain_dns("2outlook.com", resolver)
+        assert result.domain_status == "resolved"
+        assert result.mx_status == "none"
+        assert result.classification == "likely_to_bounce"
+        assert result.has_mx is False
+        assert "RFC 7505" in result.reason
+        assert "Null MX" in result.reason
+        assert any("RFC 7505 Null MX" in mx for mx in result.mx_records)

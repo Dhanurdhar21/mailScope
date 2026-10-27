@@ -8,4 +8,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  // @ts-expect-error - Vitest configuration options
+  test: {
+    environment: 'jsdom',
+    globals: true,
+  },
 })

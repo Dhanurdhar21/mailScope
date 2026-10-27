@@ -144,3 +144,144 @@ class TestDnsRouting:
         assert result.mx_status == "unknown"
         assert result.classification == "unknown"
         assert "SERVFAIL" in result.reason or "unreachable" in result.reason
+
+    async def test_regression_fallback_temporary_failure_is_unknown_not_bounce(self):
+        """
+        REGRESSION TEST (DEFECT-01):
+        When MX lookup returns NoAnswer, but A/AAAA fallback lookups experience a temporary
+        failure (Timeout, NoNameservers, etc.), the domain must be classified as 'unknown',
+        NEVER 'likely_to_bounce' / 'no_mail_records'.
+        """
+        resolver = MagicMock()
+
+        async def mock_resolve(qname, rdtype):
+            if rdtype == "MX":
+                raise dns.resolver.NoAnswer()
+            if rdtype == "A":
+                # Nameserver failure during A record fallback
+                raise dns.resolver.NoNameservers("Temporary DNS server failure")
+            if rdtype == "AAAA":
+                # Timeout during AAAA record fallback
+                raise dns.exception.Timeout("Lookup timed out")
+            raise dns.resolver.NoAnswer()
+
+        resolver.resolve = AsyncMock(side_effect=mock_resolve)
+
+        result = await inspect_domain_dns("flakey-dns.org", resolver)
+        # Must be unknown because we cannot definitively prove no mail routing exists
+        assert result.classification == "unknown"
+        assert result.domain_status in ("unknown", "timeout")
+        assert result.mx_status == "unknown"
+        assert result.classification != "likely_to_bounce"
+
+    async def test_batch_domain_resolver_coalesces_queries(self):
+        """
+        REGRESSION TEST (DEFECT-02):
+        Verify BatchDomainResolver deduplicates and coalesces in-flight DNS queries
+        so that concurrent lookups for the identical domain execute only once.
+        """
+        import asyncio
+        from backend.dns_checker import BatchDomainResolver
+
+        call_count = 0
+        resolver = MagicMock()
+
+        async def slow_mock_resolve(qname, rdtype):
+            nonlocal call_count
+            if rdtype == "MX":
+                call_count += 1
+                await asyncio.sleep(0.05) # simulate latency
+                r = MagicMock()
+                r.preference = 10
+                r.exchange = "mail.coalesce.com."
+                return [r]
+            raise dns.resolver.NoAnswer()
+
+        resolver.resolve = AsyncMock(side_effect=slow_mock_resolve)
+        batch_resolver = BatchDomainResolver(resolver)
+
+        # Dispatch 10 concurrent lookups for the same domain
+        tasks = [
+            batch_resolver.resolve_domain("COALESCE.COM")
+            for _ in range(10)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # All 10 tasks must receive identical resolved result
+        assert len(results) == 10
+        for r in results:
+            assert r.classification == "likely_to_be_delivered"
+            assert r.has_mx is True
+
+        # DNS resolver should only have been queried ONCE for MX
+        assert call_count == 1
+
+    async def test_mx_timeout_with_successful_a_record_decoupling(self):
+        """
+        TASK 7 REQUIREMENT:
+        Ensure domain resolution and MX lookup statuses are decoupled.
+        A successful A-record lookup must NOT be overwritten by an MX-query timeout.
+        When MX query times out but A query succeeds:
+        - domain_status must be 'resolved'
+        - mx_status must be 'timeout'
+        - classification must be 'unknown'
+        """
+        resolver = MagicMock()
+
+        async def mock_resolve(qname, rdtype):
+            if rdtype == "MX":
+                raise dns.exception.Timeout("MX lookup timed out")
+            if rdtype == "A":
+                return [MagicMock(address="93.184.216.34")]
+            raise dns.resolver.NoAnswer()
+
+        resolver.resolve = AsyncMock(side_effect=mock_resolve)
+
+        result = await inspect_domain_dns("timeout-mx-with-a.com", resolver)
+        assert result.domain_status == "resolved"
+        assert result.mx_status == "timeout"
+        assert result.classification == "unknown"
+        assert result.has_mx is False
+        assert "resolves in DNS" in result.reason
+        assert "timed out" in result.reason
+
+    async def test_mx_servfail_with_successful_a_record_decoupling(self):
+        """
+        Ensure that when MX query fails with SERVFAIL / NoNameservers but A records resolve:
+        - domain_status is 'resolved'
+        - mx_status is 'unknown'
+        - classification is 'unknown'
+        """
+        resolver = MagicMock()
+
+        async def mock_resolve(qname, rdtype):
+            if rdtype == "MX":
+                raise dns.resolver.NoNameservers("SERVFAIL on MX")
+            if rdtype == "A":
+                return [MagicMock(address="93.184.216.34")]
+            raise dns.resolver.NoAnswer()
+
+        resolver.resolve = AsyncMock(side_effect=mock_resolve)
+
+        result = await inspect_domain_dns("servfail-mx-with-a.com", resolver)
+        assert result.domain_status == "resolved"
+        assert result.mx_status == "unknown"
+        assert result.classification == "unknown"
+        assert result.has_mx is False
+        assert "resolves in DNS" in result.reason
+
+    async def test_configured_nameservers_fallback_order(self):
+        """
+        Verify that get_configured_nameservers preserves system nameservers first
+        and appends public fallback nameservers.
+        """
+        from backend.dns_checker import get_configured_nameservers
+        from backend.config import DNS_FALLBACK_NAMESERVERS
+
+        nameservers = get_configured_nameservers()
+        assert len(nameservers) >= 1
+        # Fallback nameservers must be present in the list
+        for fb in DNS_FALLBACK_NAMESERVERS:
+            assert fb in nameservers
+
+

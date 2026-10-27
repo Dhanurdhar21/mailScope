@@ -7,7 +7,8 @@ import type { EmailAnalysisResult } from '../types/analysis';
 
 /**
  * Escapes field values according to RFC 4180 standards and prevents CSV/Spreadsheet
- * Formula Injection (CWE-1236) by prefixing dangerous formula-leading characters.
+ * Formula Injection (CWE-1236) by neutralizing formula-leading characters, including
+ * variants with leading whitespace, tabs, or dangerous operators.
  */
 export function sanitizeCsvCell(value: unknown): string {
   if (value === null || value === undefined) {
@@ -16,9 +17,12 @@ export function sanitizeCsvCell(value: unknown): string {
 
   let str = String(value);
 
-  // Check for CSV formula injection characters: =, +, -, @, tab (\t), CR (\r)
-  const dangerousPrefixes = ['=', '+', '-', '@', '\t', '\r'];
-  if (dangerousPrefixes.some((char) => str.startsWith(char))) {
+  // Check for CSV formula injection characters: =, +, -, @, |, %, tab (\t), CR (\r)
+  // Even if preceded by whitespace, spreadsheet applications like Excel strip leading spaces
+  // and execute formulas.
+  const dangerousChars = ['=', '+', '-', '@', '|', '%', '\t', '\r'];
+  const trimmed = str.trimStart();
+  if (trimmed.length > 0 && dangerousChars.some((char) => trimmed.startsWith(char))) {
     // Prefix with single quote to force spreadsheet programs to treat as literal text
     str = `'${str}`;
   }
@@ -79,8 +83,9 @@ export function downloadCsvFile(results: EmailAnalysisResult[], filenamePrefix: 
   const blob = new Blob(['\uFEFF' + csvData], { type: 'text/csv;charset=utf-8;' }); // \uFEFF BOM for Excel UTF-8 support
   const url = URL.createObjectURL(blob);
 
+  const safePrefix = filenamePrefix.replace(/[^a-zA-Z0-9_-]/g, '_') || 'mailscope-analysis';
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `${filenamePrefix}-${timestamp}.csv`;
+  const filename = `${safePrefix}-${timestamp}.csv`;
 
   const link = document.createElement('a');
   link.href = url;

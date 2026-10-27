@@ -25,8 +25,30 @@ else:
     ]
 
 # DNS Configuration
-DNS_TIMEOUT_SECONDS: float = float(os.getenv("DNS_TIMEOUT_SECONDS", "2.5"))
-DNS_LIFETIME_SECONDS: float = float(os.getenv("DNS_LIFETIME_SECONDS", "3.0"))
+# Optional: explicitly set comma-separated custom nameservers (e.g. enterprise DNS)
+DNS_NAMESERVERS_RAW: str = os.getenv("DNS_NAMESERVERS", "")
+if DNS_NAMESERVERS_RAW.strip():
+    DNS_NAMESERVERS: List[str] = [
+        ns.strip() for ns in DNS_NAMESERVERS_RAW.split(",") if ns.strip()
+    ]
+else:
+    DNS_NAMESERVERS: List[str] = []
+
+# Fallback nameservers used if system nameservers are unreachable or timeout
+# Set to 'none', 'false', or '0' to disable external fallback
+DNS_FALLBACK_NAMESERVERS_RAW: str = os.getenv(
+    "DNS_FALLBACK_NAMESERVERS",
+    "1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4"
+)
+if DNS_FALLBACK_NAMESERVERS_RAW.strip().lower() in ("none", "false", "0"):
+    DNS_FALLBACK_NAMESERVERS: List[str] = []
+else:
+    DNS_FALLBACK_NAMESERVERS: List[str] = [
+        ns.strip() for ns in DNS_FALLBACK_NAMESERVERS_RAW.split(",") if ns.strip()
+    ]
+
+DNS_TIMEOUT_SECONDS: float = float(os.getenv("DNS_TIMEOUT_SECONDS", "2.0"))
+DNS_LIFETIME_SECONDS: float = float(os.getenv("DNS_LIFETIME_SECONDS", "5.0"))
 MAX_CONCURRENT_DNS_LOOKUPS: int = int(os.getenv("MAX_CONCURRENT_DNS_LOOKUPS", "25"))
 
 # API Batch Constraints

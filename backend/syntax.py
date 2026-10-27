@@ -1,6 +1,7 @@
 """
 Email Syntax and Normalization Validator for MailScope.
 Implements RFC 5321 and RFC 5322 syntax validation, length rules, and IDNA support.
+Defensively protects against null bytes, control characters, and malformed inputs.
 """
 
 from dataclasses import dataclass
@@ -31,14 +32,46 @@ class SyntaxValidationResult:
     error_reason: Optional[str] = None
     is_disposable: bool = False
 
-def validate_email_syntax(raw_email: str) -> SyntaxValidationResult:
+def validate_email_syntax(raw_email: object) -> SyntaxValidationResult:
     """
     Validates an email address against RFC 5321 and RFC 5322 rules.
     Performs length, character, dot-atom, and IDNA domain label validation.
     """
+    if not isinstance(raw_email, str):
+        return SyntaxValidationResult(
+            is_valid=False,
+            normalized_email="",
+            local_part="",
+            domain="",
+            ascii_domain="",
+            error_reason="Email address must be a string."
+        )
+
+    # 1. Null byte injection check
+    if "\x00" in raw_email:
+        return SyntaxValidationResult(
+            is_valid=False,
+            normalized_email=raw_email.replace("\x00", ""),
+            local_part="",
+            domain="",
+            ascii_domain="",
+            error_reason="Email address contains prohibited null bytes."
+        )
+
+    # 2. Control characters check (ASCII 0-31 or 127)
+    if any(ord(c) < 32 or ord(c) == 127 for c in raw_email):
+        return SyntaxValidationResult(
+            is_valid=False,
+            normalized_email=raw_email.strip(),
+            local_part="",
+            domain="",
+            ascii_domain="",
+            error_reason="Email address contains unencoded control characters."
+        )
+
     clean_email = raw_email.strip()
 
-    # 1. Empty or whitespace check
+    # 3. Empty or whitespace check
     if not clean_email:
         return SyntaxValidationResult(
             is_valid=False,
@@ -49,7 +82,7 @@ def validate_email_syntax(raw_email: str) -> SyntaxValidationResult:
             error_reason="Empty email string provided."
         )
 
-    # 2. Check for whitespace inside address
+    # 4. Check for whitespace inside address
     if any(char.isspace() for char in clean_email):
         return SyntaxValidationResult(
             is_valid=False,
@@ -60,7 +93,7 @@ def validate_email_syntax(raw_email: str) -> SyntaxValidationResult:
             error_reason="Address contains unquoted whitespace characters."
         )
 
-    # 3. Overall length check (RFC 5321 section 4.5.3.1.3: max 254 octets)
+    # 5. Overall length check (RFC 5321 section 4.5.3.1.3: max 254 octets)
     if len(clean_email) > 254:
         return SyntaxValidationResult(
             is_valid=False,
@@ -71,7 +104,7 @@ def validate_email_syntax(raw_email: str) -> SyntaxValidationResult:
             error_reason=f"Address length ({len(clean_email)}) exceeds maximum RFC 5321 limit of 254 characters."
         )
 
-    # 4. '@' delimiter check
+    # 6. '@' delimiter check
     if "@" not in clean_email:
         return SyntaxValidationResult(
             is_valid=False,
@@ -95,7 +128,7 @@ def validate_email_syntax(raw_email: str) -> SyntaxValidationResult:
 
     local_part, domain_part = parts[0], parts[1]
 
-    # 5. Local-part validation (RFC 5321 section 4.5.3.1.1: max 64 characters)
+    # 7. Local-part validation (RFC 5321 section 4.5.3.1.1: max 64 characters)
     if not local_part:
         return SyntaxValidationResult(
             is_valid=False,
@@ -158,7 +191,7 @@ def validate_email_syntax(raw_email: str) -> SyntaxValidationResult:
             error_reason=f"Local-part contains invalid character(s): '{''.join(set(invalid_local_chars))}'."
         )
 
-    # 6. Domain-part validation
+    # 8. Domain-part validation
     if not domain_part:
         return SyntaxValidationResult(
             is_valid=False,

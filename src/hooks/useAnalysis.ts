@@ -125,6 +125,7 @@ export function useAnalysis() {
     }, 80);
 
     // Initial stage update: Stage 1 completed (input accepted and normalized)
+    // Stages 2-5 are marked in_progress as the unified backend pipeline runs
     setStages((prev) =>
       prev.map((stage) => {
         if (stage.id === 1) {
@@ -134,51 +135,16 @@ export function useAnalysis() {
             note: `Accepted ${parsedInput.uniqueEmails.length} unique address(es)`
           };
         }
-        if (stage.id === 2) {
-          return { ...stage, status: 'in_progress', note: 'Verifying format compliance...' };
+        if (stage.id >= 2 && stage.id <= 5) {
+          return { ...stage, status: 'in_progress', note: 'Analysis pipeline in progress...' };
         }
         return { ...stage, status: 'pending', note: undefined };
       })
     );
 
-    // Stagger stage states truthfully to reflect backend pipeline while awaiting response
-    const stage2Timer = window.setTimeout(() => {
-      setStages((prev) =>
-        prev.map((s) => {
-          if (s.id === 2) return { ...s, status: 'completed' };
-          if (s.id === 3) return { ...s, status: 'in_progress', note: 'Querying authoritative nameservers...' };
-          return s;
-        })
-      );
-    }, 280);
-
-    const stage3Timer = window.setTimeout(() => {
-      setStages((prev) =>
-        prev.map((s) => {
-          if (s.id === 3) return { ...s, status: 'completed' };
-          if (s.id === 4) return { ...s, status: 'in_progress', note: 'Evaluating MX records and fallback routes...' };
-          return s;
-        })
-      );
-    }, 550);
-
-    const stage4Timer = window.setTimeout(() => {
-      setStages((prev) =>
-        prev.map((s) => {
-          if (s.id === 4) return { ...s, status: 'completed' };
-          if (s.id === 5) return { ...s, status: 'in_progress', note: 'Synthesizing evidence & confidence reasons...' };
-          return s;
-        })
-      );
-    }, 820);
-
     try {
       const response = await analyzeEmailsApi(parsedInput.uniqueEmails, abortController.signal);
 
-      // Clear progression timers
-      clearTimeout(stage2Timer);
-      clearTimeout(stage3Timer);
-      clearTimeout(stage4Timer);
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
       }
@@ -186,18 +152,35 @@ export function useAnalysis() {
       setElapsedTimeMs(response.summary.duration_ms || (Date.now() - startTime));
       setAnalysisResponse(response);
 
-      // Mark all stages completed
+      // Mark all stages completed with verified details from the actual response
       setStages((prev) =>
-        prev.map((stage) => ({
-          ...stage,
-          status: 'completed',
-          note: stage.id === 6 ? `Analyzed ${response.results.length} address(es)` : stage.note
-        }))
+        prev.map((stage) => {
+          if (stage.id === 1) {
+            return { ...stage, status: 'completed', note: `Accepted ${parsedInput.uniqueEmails.length} unique address(es)` };
+          }
+          if (stage.id === 2) {
+            return { ...stage, status: 'completed', note: `Validated ${response.results.length} addresses against RFC 5321/5322 syntax` };
+          }
+          if (stage.id === 3) {
+            return { ...stage, status: 'completed', note: `Authoritative DNS inspected with concurrency control` };
+          }
+          if (stage.id === 4) {
+            return { ...stage, status: 'completed', note: `Evaluated MX routing and fallback records` };
+          }
+          if (stage.id === 5) {
+            return {
+              ...stage,
+              status: 'completed',
+              note: `${response.summary.likely_to_be_delivered} deliverable, ${response.summary.likely_to_bounce} bounce, ${response.summary.unknown} unknown`
+            };
+          }
+          if (stage.id === 6) {
+            return { ...stage, status: 'completed', note: `Completed in ${response.summary.duration_ms}ms` };
+          }
+          return { ...stage, status: 'completed' };
+        })
       );
     } catch (err: any) {
-      clearTimeout(stage2Timer);
-      clearTimeout(stage3Timer);
-      clearTimeout(stage4Timer);
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
       }
@@ -209,11 +192,11 @@ export function useAnalysis() {
       const message = err.message || 'An error occurred during deliverability analysis.';
       setAnalysisError(message);
 
-      // Mark current stage failed
+      // Mark in-progress stages as failed
       setStages((prev) =>
         prev.map((stage) => {
           if (stage.status === 'in_progress') {
-            return { ...stage, status: 'failed', note: 'Request failed at this stage.' };
+            return { ...stage, status: 'failed', note: message };
           }
           return stage;
         })
