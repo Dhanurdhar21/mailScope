@@ -1,224 +1,458 @@
-# MailScope — Professional Email Deliverability Analyzer
+# MailScope — Email Deliverability Analyzer
 
 ![MailScope Brand](public/mailscope-icon.svg)
 
-> **MailScope** is a production-grade SaaS web application and API service engineered to inspect email address deliverability evidence through deterministic RFC syntax validation, authoritative asynchronous DNS resolution, and mail exchange (MX) record routing analysis—**without sending intrusive test emails**.
+**MailScope** is a web application that analyzes email addresses using syntax validation, DNS lookups, and Mail Exchange (MX) record analysis to assess whether their domains appear configured to receive email.
 
-Developed as a showcase frontend engineering, backend API architecture, and accessibility project.
+The application combines a React and TypeScript frontend with a Python FastAPI backend. It provides understandable classifications, technical explanations, domain-level diagnostics, and analysis results without sending test emails.
 
----
+> **Important:** MailScope performs DNS-based analysis. It does not guarantee email delivery or independently confirm that an individual recipient's mailbox exists.
 
-## 🌟 Key Capabilities & Architectural Highlights
+## Live Application
 
-### 1. High-Performance Asynchronous Backend (FastAPI + dnspython)
-- **Non-Blocking Async Resolution**: Uses `dns.asyncresolver.Resolver` with `asyncio.gather()` and an `asyncio.Semaphore` (max 25 concurrent lookups) to prevent socket exhaustion and keep the event loop responsive.
-- **Batch-Level Domain Caching**: Addresses sharing the same domain within a batch (e.g., 50 addresses at `@example.com`) query DNS only once, dramatically reducing latency and network traffic.
-- **RFC 7505 Null MX Detection**: Explicitly identifies domains publishing a Null MX (`.`) to advertise that they refuse all incoming mail, accurately classifying them as `likely_to_bounce`.
-- **RFC 5321 Fallback Routing**: When no dedicated MX records exist, automatically evaluates A and AAAA host address records for implicit mail routing viability.
-- **Deterministic Outcome Classification**: Distinguishes confirmed `NXDOMAIN` and empty routing from DNS timeouts and temporary `SERVFAIL`/`NoNameservers` conditions (classified truthfully as `unknown` rather than false hard bounces).
+- **Frontend:** https://mail-scope-zeta.vercel.app
+- **Backend API:** https://mailscope-backend.onrender.com
+- **API documentation:** https://mailscope-backend.onrender.com/docs
+- **Backend health check:** https://mailscope-backend.onrender.com/health
+- **GitHub repository:** https://github.com/Dhanurdhar21/mailScope
 
-### 2. Comprehensive RFC 5321 / 5322 Syntax Validator
-- Replaces naive regular expressions with a structured validator:
-  - Enforces RFC 5321 length limits: total address &le; 254 chars, local-part &le; 64 chars, domain &le; 253 chars, domain labels &le; 63 chars.
-  - Detects dot-atom violations: leading dots, trailing dots, and consecutive dots (`..`).
-  - Supports RFC 5322 printable characters and plus-addressing (`user+tag@domain.com`).
-  - Supports Internationalized Domain Names (IDN/Punycode) via RFC 5891 IDNA encoding (`kontakt@münchen.de` &rarr; `kontakt@xn--mnchen-3ya.de`).
+## Key Features
 
-### 3. Truthful 6-Stage Processing Pipeline
-- **Stage 1 — Input Received**: Normalizes multi-delimiter entries (newlines, commas, semicolons, spaces) and deduplicates targets.
-- **Stage 2 — Syntax Analysis**: Strict RFC validation and local-part constraint inspection.
-- **Stage 3 — Domain Lookup**: Verifies authoritative DNS registration, detecting `NXDOMAIN` and network timeouts.
-- **Stage 4 — Mail Routing Analysis**: Queries and sorts active MX records by preference, evaluating RFC 5321 A/AAAA fallback routing when MX records are absent.
-- **Stage 5 — Classification**: Synthesizes network evidence into clear confidence states with transparent reasoning.
-- **Stage 6 — Results Ready**: Displays interactive metrics, search/filtering, detailed drawer inspections, and CSV export.
+### 1. Email Syntax Validation
 
-### 4. Transparent Deliverability Taxonomy
-- **`LIKELY TO BE DELIVERED`**: Syntax is valid and active MX servers are responding. *(Note: Mailbox existence cannot be guaranteed without real message transmission).*
-- **`LIKELY TO BOUNCE`**: Definitive delivery problem identified (malformed RFC syntax, confirmed `NXDOMAIN`, RFC 7505 Null MX, or confirmed domain with no routing records).
-- **`UNKNOWN / FALLBACK`**: Insufficient or ambiguous evidence (DNS timeouts, temporary server errors, or fallback A/AAAA routing without dedicated MX).
+MailScope checks email address formatting before performing domain-level analysis.
 
-### 5. Production-Grade SaaS Interface & Design System
-- **Restrained Light Theme**: Built using clean SaaS standards (`#F7F8FA` background, `#FFFFFF` surfaces, `#182230` primary text, `#667085` secondary text, `#315EFB` developer blue accent, `#E4E7EC` borders).
-- **Accessible Indicators**: Statuses are never conveyed by color alone—distinct SVG icons, clear textual badges, and WCAG AA contrast standards are strictly enforced.
-- **Real-Time Backend Health Monitoring**: Live ping against `GET /health` displays connection status with automatic retry and service metadata.
-- **Secure CSV Export**: Full CSV generation with formula injection protection (CWE-1236 mitigation) escaping dangerous formula prefixes (`=`, `+`, `-`, `@`, `\t`, `\r`).
+Validation can identify common formatting problems, including:
 
----
+- Missing or misplaced `@` delimiters.
+- Empty local parts or domain components.
+- Consecutive dots and other invalid dot placement.
+- Domain label and email length violations.
+- Invalid domain formatting.
 
-## 🛠️ Technology Stack
+The implementation also supports applicable internationalized domain name handling.
 
-| Layer | Technology |
+Syntax validation establishes whether an address conforms to the application's validation rules; it does not establish that the mailbox exists.
+
+### 2. DNS and Domain Analysis
+
+MailScope uses Python's `dnspython` library to inspect DNS responses associated with an email domain.
+
+Depending on the response, the application can distinguish between:
+
+- A domain that resolves successfully.
+- A domain that returns `NXDOMAIN`.
+- A DNS lookup that times out.
+- Other DNS resolution errors.
+- Insufficient or ambiguous DNS evidence.
+
+Temporary DNS failures are not equivalent to proof that a domain does not exist.
+
+### 3. MX Record Analysis
+
+Mail Exchange (MX) records identify the mail servers designated to receive email for a domain.
+
+MailScope examines MX information to assess the domain's mail-routing configuration.
+
+The analysis considers cases such as:
+
+- **MX records present:** The domain has designated mail servers.
+- **Null MX:** The domain explicitly indicates that it does not accept email.
+- **No MX records:** The application may examine A or AAAA records to assess whether implicit mail routing could be possible.
+- **DNS timeout or resolution failure:** The available evidence may be insufficient for a reliable classification.
+
+MX records provide information about domain-level mail routing. They do not confirm the existence of a particular recipient's mailbox.
+
+### 4. Deliverability Classification
+
+MailScope presents its analysis using three primary classifications:
+
+| Classification | Meaning |
 |---|---|
-| **Backend API** | [FastAPI](https://fastapi.tiangolo.com) + [Uvicorn](https://www.uvicorn.org) |
-| **DNS Engine** | [dnspython](https://www.dnspython.org) (`dns.asyncresolver`) |
-| **Data Validation** | [Pydantic v2](https://docs.pydantic.dev) + [idna](https://github.com/kjd/idna) |
-| **Backend Tests** | [pytest](https://docs.pytest.org) + [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) + [httpx](https://www.python-httpx.org) |
-| **Frontend Framework** | [React 19](https://react.dev) + [TypeScript](https://www.typescriptlang.org) (Strict Mode) |
-| **Build Tooling** | [Vite 8](https://vite.dev) + [`@tailwindcss/vite`](https://tailwindcss.com) |
-| **Styling** | Tailwind CSS v4 + Vanilla CSS Design Tokens |
-| **Routing** | [React Router v7](https://reactrouter.com) (`/`, `/dashboard`, `*` 404) |
-| **Icons & Fonts** | [Lucide React](https://lucide.dev) + Inter & JetBrains Mono |
+| `likely_to_be_delivered` | The available evidence supports the possibility of email delivery, based on the application's analysis rules. |
+| `likely_to_bounce` | The application has identified evidence suggesting a delivery problem, such as invalid syntax, a nonexistent domain, or Null MX. |
+| `unknown` | The available evidence is insufficient, ambiguous, or affected by a DNS resolution problem. |
 
----
+These classifications are assessments, not guarantees. Actual delivery depends on additional factors, including mailbox existence, recipient-server policies, sender reputation, and message filtering.
 
-## 📁 Repository Structure
+### 5. Analysis Results and Technical Explanations
 
+The results interface presents information such as:
+
+- Email address and detected domain.
+- Syntax validation status.
+- Domain resolution status.
+- MX routing status.
+- Overall classification.
+- Technical explanation for the result.
+- Additional diagnostic information where available.
+
+This helps users understand the evidence behind a classification rather than relying on a simple valid-or-invalid label.
+
+### 6. Batch Analysis and CSV Export
+
+MailScope supports analyzing multiple email addresses through its batch-analysis workflow.
+
+The application is configured with a maximum batch size of 200 addresses.
+
+CSV export allows analysis results to be saved for further review. Exported data should reflect the actual results returned by the application.
+
+CSV content intended for spreadsheet applications should be handled carefully to reduce the risk of formula injection.
+
+### 7. Backend Health Monitoring
+
+The frontend can check the backend's health through the `GET /health` endpoint.
+
+This helps indicate whether the backend service is responding. A successful health check does not guarantee that every DNS query or analysis request will succeed.
+
+## Technology Stack
+
+| Component | Technology | Purpose |
+|---|---|---|
+| Frontend framework | React | User interface |
+| Programming language | TypeScript | Frontend types and application logic |
+| Build tool | Vite | Frontend development and production builds |
+| Styling | Tailwind CSS and CSS | Layout and visual design |
+| Icons | Lucide React | Interface icons |
+| Backend framework | FastAPI | HTTP API and request handling |
+| ASGI server | Uvicorn | Running the Python backend |
+| DNS analysis | dnspython | DNS and MX record queries |
+| Data validation | Pydantic | Request and response validation |
+| Domain name handling | idna | Internationalized domain name processing |
+| Testing | pytest and related tools | Backend testing |
+
+The exact installed versions are defined by the project's dependency and package configuration files.
+
+## System Architecture
+
+MailScope follows a frontend-backend architecture.
+
+```text
+                 User
+                  |
+                  v
+        React + TypeScript UI
+                  |
+                  | HTTP requests
+                  v
+            FastAPI Backend
+                  |
+                  v
+       Email Syntax Validation
+                  |
+                  v
+          DNS / MX Analysis
+                  |
+                  v
+       Classification and Results
+                  |
+                  v
+         JSON API Response
+                  |
+                  v
+       Results Display and Export
 ```
-smtp/
+
+### Processing Workflow
+
+1. **Input:** The user supplies one or more email addresses.
+2. **Syntax validation:** The backend evaluates each address against its validation rules.
+3. **Domain extraction:** The domain is identified for DNS analysis.
+4. **DNS resolution:** The backend queries DNS for relevant domain information.
+5. **Mail-routing analysis:** MX records and applicable fallback information are evaluated.
+6. **Classification:** The backend interprets the available evidence.
+7. **Results:** The frontend displays the classification, technical explanation, and available diagnostics.
+
+## Repository Structure
+
+The following is the documented high-level structure. Refer to the actual repository for the definitive list of files.
+
+```text
+mailScope/
 ├── backend/
-│   ├── config.py            # Environment settings (CORS, timeouts, batch limits)
-│   ├── dns_checker.py       # Async DNS resolver, RFC 7505 Null MX, A/AAAA fallback, caching
-│   ├── main.py              # FastAPI application, lifecycle, health & analyze endpoints
-│   ├── models.py            # Pydantic request/response schemas matching frontend types
-│   ├── requirements.txt     # Python runtime & testing dependencies
-│   └── syntax.py            # RFC 5321/5322 syntax validation, length rules, IDNA support
+│   ├── config.py
+│   ├── dns_checker.py
+│   ├── main.py
+│   ├── models.py
+│   ├── requirements.txt
+│   └── syntax.py
 ├── public/
-│   ├── mailscope-icon.svg   # Custom SVG brand icon
-│   └── favicon.svg          # Favicon
+│   ├── mailscope-icon.svg
+│   └── favicon.svg
 ├── src/
-│   ├── components/          # Reusable UI components (Button, ResultsTable, Modal, etc.)
-│   ├── hooks/               # Custom React hooks (useAnalysis, useBackendHealth)
-│   ├── pages/               # LandingPage, DashboardPage, NotFoundPage
-│   ├── services/            # API client, CSV exporter, email input parser
-│   ├── types/               # TypeScript interfaces (models, statuses, responses)
-│   ├── App.tsx              # Router configuration
-│   ├── index.css            # Tailwind CSS theme & tokens
-│   └── main.tsx             # Frontend entry point
+│   ├── components/
+│   ├── hooks/
+│   ├── pages/
+│   ├── services/
+│   ├── types/
+│   ├── App.tsx
+│   ├── index.css
+│   └── main.tsx
 ├── tests/
-│   ├── conftest.py          # Pytest setup and path configuration
-│   ├── test_api.py          # API endpoint tests (health, analyze, CORS, limits, errors)
-│   ├── test_dns.py          # Deterministic unit tests with mocked DNS responses
-│   ├── test_integration_dns.py # Live DNS integration tests
-│   └── test_syntax.py       # Comprehensive syntax unit tests
-├── .env                     # Local environment configuration
-├── .env.example             # Environment configuration template
-├── pytest.ini               # Pytest configuration
+├── .env.example
 ├── package.json
+├── pytest.ini
 ├── tsconfig.json
 └── vite.config.ts
 ```
 
----
+### Important Backend Files
 
-## 🚀 Quickstart Guide
+| File | Responsibility |
+|---|---|
+| `backend/main.py` | FastAPI application and API endpoints |
+| `backend/dns_checker.py` | DNS and mail-routing analysis |
+| `backend/syntax.py` | Email syntax validation |
+| `backend/models.py` | Request and response models |
+| `backend/config.py` | Backend configuration |
+| `backend/requirements.txt` | Python dependencies |
+
+## Getting Started Locally
 
 ### Prerequisites
-- **Node.js**: v18.0.0 or higher (v22+ recommended)
-- **Python**: v3.10+ (v3.12/v3.14 recommended)
 
-### Step 1: Install Python Dependencies
+Install the following:
+
+- Python compatible with the project's dependencies.
+- Node.js and npm.
+- Git, if cloning the repository.
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/Dhanurdhar21/mailScope.git
+cd mailScope
+```
+
+### 2. Install Backend Dependencies
+
+From the repository root:
+
 ```bash
 python -m pip install -r backend/requirements.txt
 ```
 
-### Step 2: Start the FastAPI Backend
+### 3. Configure Environment Variables
+
+Review `.env.example` and configure the variables required by the application.
+
+For local frontend development, the API base URL should point to the local backend:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+Configure backend variables according to `backend/config.py` and the application's deployment settings.
+
+Do not commit `.env` files containing credentials, tokens, or other secrets.
+
+### 4. Start the Backend
+
+From the repository root, run:
+
 ```bash
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-*The backend starts on `http://127.0.0.1:8000` with interactive Swagger docs at `http://127.0.0.1:8000/docs`.*
 
-### Step 3: Start the Frontend Dev Server
-In a separate terminal:
+The local API should be available at:
+
+- API base: http://127.0.0.1:8000
+- Interactive API documentation: http://127.0.0.1:8000/docs
+- Health check: http://127.0.0.1:8000/health
+
+### 5. Install Frontend Dependencies
+
+Open a separate terminal in the repository root:
+
 ```bash
 npm install
+```
+
+### 6. Configure the Frontend API URL
+
+Create or update the frontend environment file used by your Vite configuration:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+The frontend should use the URL of the backend environment you want to access.
+
+Restart the development server after changing environment variables.
+
+### 7. Start the Frontend
+
+```bash
 npm run dev
 ```
-Open **`http://127.0.0.1:5173`** in your browser.
 
----
+Open the local URL displayed by Vite, typically:
 
-## 🧪 Running the Backend Test Suite
+http://localhost:5173
 
-The test suite runs 28 deterministic unit and integration tests covering syntax rules, mocked DNS edge cases (Null MX, timeouts, fallback), API status codes, and schema compatibility:
+## API Reference
+
+The following endpoints are available in the documented API contract. Consult the live API documentation for the current schemas and response details.
+
+### 1. Backend Health Check
+
+**Endpoint:** `GET /health`
+
+Example request:
+
+```bash
+curl https://mailscope-backend.onrender.com/health
+```
+
+This endpoint reports the backend's health information.
+
+The exact response fields depend on the deployed implementation.
+
+### 2. Email Analysis
+
+**Endpoint:** `POST /api/analyze`
+
+Example request:
+
+```json
+{
+  "emails": [
+    "contact@gmail.com",
+    "user+tag@example.org",
+    "invalid..address@example.org"
+  ]
+}
+```
+
+Example command:
+
+```bash
+curl -X POST "https://mailscope-backend.onrender.com/api/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{"emails":["contact@gmail.com","user+tag@example.org","invalid..address@example.org"]}'
+```
+
+The backend returns analysis results according to its response schema. Results may include syntax status, domain status, MX status, classification, technical reasoning, and available diagnostic details.
+
+The exact response depends on the input and current DNS responses. The request above is an example and does not represent a stored or guaranteed result.
+
+### Batch Size
+
+The configured maximum batch size is 200 email addresses per request. Requests exceeding the configured limit may be rejected.
+
+For the authoritative request and response schemas, open:
+
+https://mailscope-backend.onrender.com/docs
+
+## Running Tests
+
+The repository includes a backend test suite. Tests may cover syntax validation, API behavior, and DNS scenarios, depending on the available test files.
+
+From the repository root, install the dependencies and run:
 
 ```bash
 python -m pytest -v
 ```
 
-To run only the deterministic unit tests:
+If the test suite separates live DNS integration tests from deterministic tests, the latter can be run separately using the project's pytest markers:
+
 ```bash
 python -m pytest -m "not integration" -v
 ```
 
----
+Use the actual test output when documenting test counts or success rates. Live DNS tests may depend on network connectivity and the current state of external DNS infrastructure.
 
-## 📡 API Reference & Contract
+## Deployment
 
-### 1. Health Check
-`GET /health`
-```json
-{
-  "status": "ok",
-  "service": "mailscope-analyzer",
-  "version": "1.0.0",
-  "timestamp": 1793037584.11652,
-  "dns_resolver": "active"
-}
+MailScope's frontend and backend are deployed separately.
+
+### Frontend — Vercel
+
+- **Production URL:** https://mail-scope-zeta.vercel.app
+- **Build command:** `npm run build`
+- **Output directory:** `dist`
+- **Environment variable:** `VITE_API_BASE_URL`
+
+For the production frontend, configure:
+
+```env
+VITE_API_BASE_URL=https://mailscope-backend.onrender.com
 ```
 
-### 2. Deliverability Analysis
-`POST /api/analyze`
+Vite environment variables are applied during the frontend build. Redeploy the frontend after changing production environment variables.
 
-**Request Body:**
-```json
-{
-  "emails": [
-    "contact@google.com",
-    "bad..syntax@com",
-    "user+tag@github.com",
-    "test@nonexistentdomain-xyz-404-check.com"
-  ]
-}
+### Backend — Render
+
+- **Production URL:** https://mailscope-backend.onrender.com
+- **Build command:** `pip install -r backend/requirements.txt`
+- **Start command:**
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```
 
-**Response Body:**
-```json
-{
-  "results": [
-    {
-      "email": "contact@google.com",
-      "normalized_email": "contact@google.com",
-      "syntax_valid": true,
-      "domain": "google.com",
-      "domain_status": "resolved",
-      "mx_status": "present",
-      "classification": "likely_to_be_delivered",
-      "reason": "Domain 'google.com' resolves with 1 active MX record(s). Mail routing is technically configured.",
-      "diagnostics": {
-        "has_mx": true,
-        "has_fallback_a": false,
-        "mx_records": ["smtp.google.com (priority: 10)"],
-        "is_disposable": false,
-        "syntax_error": null,
-        "response_time_ms": 27.65
-      }
-    }
-  ],
-  "summary": {
-    "total": 4,
-    "likely_to_be_delivered": 2,
-    "likely_to_bounce": 2,
-    "unknown": 0,
-    "duration_ms": 115.42
-  }
-}
+Configure backend environment variables according to the application's configuration.
+
+Examples of relevant settings include:
+
+| Variable | Purpose |
+|---|---|
+| `CORS_ORIGINS` | Permitted frontend origins |
+| `DNS_TIMEOUT_SECONDS` | DNS query timeout |
+| `MAX_EMAIL_BATCH_SIZE` | Maximum number of addresses per batch |
+
+Use the exact defaults and supported values defined in the backend configuration.
+
+Ensure that the production CORS configuration permits the deployed frontend origin:
+
+```text
+https://mail-scope-zeta.vercel.app
 ```
 
----
+## Limitations
 
-## 🌐 Production Deployment Guide (e.g., Render, Railway)
+MailScope is designed to assess email-domain configuration using syntax and DNS evidence. Its results should be interpreted within those boundaries.
 
-### Backend Deployment (Render Web Service)
-- **Environment**: Python 3
-- **Build Command**: `pip install -r backend/requirements.txt`
-- **Start Command**: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-- **Environment Variables**:
-  - `CORS_ORIGINS`: Comma-separated list of allowed frontend origins (e.g., `https://mailscope.vercel.app`)
-  - `DNS_TIMEOUT_SECONDS`: `2.5`
-  - `MAX_EMAIL_BATCH_SIZE`: `200`
+- **Mailbox existence:** DNS and MX records do not prove that an individual mailbox exists.
+- **Delivery guarantees:** A positive classification does not guarantee that a message will be accepted, delivered, or placed in the inbox.
+- **Bounce predictions:** A negative classification is an assessment based on available evidence, not proof that every attempted message will bounce.
+- **Temporary DNS failures:** Timeouts and transient resolver errors may prevent a reliable conclusion.
+- **Recipient policies:** Mail servers may reject messages based on recipient policies, sender reputation, authentication, rate limits, or other controls.
+- **Spam filtering:** DNS-based analysis cannot determine with certainty whether a message will be classified as spam.
 
-### Frontend Deployment (Vercel, Netlify, Render Static Site)
-- **Build Command**: `npm run build`
-- **Publish Directory**: `dist`
-- **Environment Variables**:
-  - `VITE_API_BASE_URL`: URL of your deployed backend service (e.g., `https://mailscope-api.onrender.com`)
+MailScope does not claim to perform mailbox verification through SMTP unless such functionality is separately implemented and verified.
+
+## Security and Responsible Use
+
+- Do not commit secrets or local credentials to the repository.
+- Configure CORS to permit only the required frontend origins.
+- Validate incoming requests and enforce configured batch limits.
+- Treat DNS responses as external data that may be incomplete or temporarily unavailable.
+- Avoid submitting sensitive email lists to systems without appropriate authorization.
+- Do not interpret domain-level results as proof that a particular person's email address exists.
+
+## Future Enhancements
+
+Possible future improvements include:
+
+- Additional domain and email authentication diagnostics, such as SPF and DMARC analysis.
+- More detailed historical analysis and comparison.
+- Improved batch-processing feedback for large lists.
+- Additional test coverage for DNS edge cases.
+- Optional integrations with specialized email-validation services.
+- More detailed performance monitoring and reporting.
+
+These are potential enhancements, not claims about functionality already implemented.
+
+## Conclusion
+
+MailScope demonstrates how a web application can combine frontend development, API design, email syntax validation, and DNS-based mail-routing analysis into a practical deliverability assessment tool.
+
+By interpreting DNS and MX record evidence and explaining the resulting classifications, the application helps users understand a domain's email configuration while clearly communicating the limitations of DNS-based verification.
+
+## Links
+
+- **Live application:** https://mail-scope-zeta.vercel.app
+- **Backend API:** https://mailscope-backend.onrender.com
+- **Interactive API documentation:** https://mailscope-backend.onrender.com/docs
+- **GitHub repository:** https://github.com/Dhanurdhar21/mailScope
