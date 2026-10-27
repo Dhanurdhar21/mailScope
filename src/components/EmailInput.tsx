@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Sparkles,
   Trash2,
   Play,
   AlertCircle,
   CopyCheck,
-  HelpCircle
+  Maximize2,
+  Minimize2,
+  ShieldCheck
 } from 'lucide-react';
 import { Button } from './Button';
 import type { ParsedEmailResult } from '../services/emailParser';
@@ -31,25 +33,50 @@ export const EmailInput: React.FC<EmailInputProps> = ({
   onClear,
   hasResults
 }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const count = parsed.uniqueEmails.length;
   const isOverLimit = parsed.exceedsLimit;
   const hasDuplicates = parsed.duplicateCount > 0;
 
   return (
-    <div className="bg-white rounded-2xl border border-[#E4E7EC] p-6 shadow-xs">
-      {/* Title & Context */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-        <div>
-          <h2 className="text-lg font-semibold text-[#182230] tracking-tight">
-            Analyze email addresses
-          </h2>
-          <p className="text-sm text-[#667085] mt-0.5">
-            Paste one or more email addresses to inspect their syntax and available domain mail-routing evidence.
-          </p>
+    <div className="bg-white rounded-2xl border border-[#E4E7EC] p-4 sm:p-5 shadow-xs transition-all">
+      {/* Top Bar: Title & Quick Shortcuts */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-[#EFF8FF] text-[#315EFB] flex items-center justify-center font-bold text-xs border border-[#B2DDFF]/60 shrink-0">
+            &gt;_
+          </div>
+          <div>
+            <h2 className="text-sm sm:text-base font-bold text-[#182230] tracking-tight">
+              Email Target Input
+            </h2>
+            <p className="text-[11px] text-[#667085]">
+              Paste single or bulk addresses to inspect RFC syntax and authoritative DNS routing.
+            </p>
+          </div>
         </div>
 
         {/* Action Shortcuts */}
         <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-[#475467] bg-[#F8F9FC] hover:bg-[#F2F4F7] border border-[#E4E7EC] rounded-lg transition-colors"
+            title={isExpanded ? 'Collapse input area' : 'Expand input area'}
+          >
+            {isExpanded ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5 text-[#667085]" />
+                <span className="hidden sm:inline">Compact</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5 text-[#667085]" />
+                <span className="hidden sm:inline">Expand</span>
+              </>
+            )}
+          </button>
+
           <Button
             variant="outline"
             size="sm"
@@ -58,8 +85,9 @@ export const EmailInput: React.FC<EmailInputProps> = ({
             icon={<Sparkles className="w-3.5 h-3.5 text-[#315EFB]" />}
             title="Populate input with real and invalid sample email addresses"
           >
-            Load Sample Data
+            Load Sample
           </Button>
+
           <Button
             variant="ghost"
             size="sm"
@@ -80,59 +108,61 @@ export const EmailInput: React.FC<EmailInputProps> = ({
         </label>
         <textarea
           id="email-input-textarea"
-          rows={6}
+          rows={isExpanded ? 10 : 3}
           value={inputText}
           onChange={(e) => onChange(e.target.value)}
           disabled={isAnalyzing}
-          placeholder={`alex@example.com\njordan@company.org\ncontact@sample.net\n(Accepts newlines, commas, semicolons, or spaces)`}
-          className={`w-full font-mono text-sm p-4 rounded-xl border transition-all resize-y outline-none ${
+          placeholder="Enter addresses (e.g. user@domain.com, team@company.org)... Accepts newlines, commas, semicolons, or spaces"
+          className={`w-full font-mono text-xs sm:text-sm p-3.5 rounded-xl border transition-all resize-y outline-none leading-relaxed ${
             isOverLimit
               ? 'border-[#FDA29B] focus:ring-2 focus:ring-[#F04438]/20 bg-[#FFFBFA]'
               : 'border-[#D0D5DD] focus:border-[#315EFB] focus:ring-2 focus:ring-[#315EFB]/15 bg-white'
           } ${isAnalyzing ? 'bg-[#F9FAFB] cursor-not-allowed opacity-75' : ''}`}
         />
 
-        {/* Counter Overlay */}
-        <div className="flex items-center justify-between text-xs text-[#667085] mt-2 px-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-medium text-[#344054]">
-              Detected: <strong className="text-[#182230]">{count}</strong> address{count === 1 ? '' : 'es'}
+        {/* Live Detected-Address Status Badges Strip */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mt-2 px-1 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#F2F4F7] text-[#344054] border border-[#E4E7EC]">
+              Detected: <strong className="text-[#182230]">{count}</strong>
             </span>
+
             {hasDuplicates && (
-              <span className="inline-flex items-center gap-1 text-[#475467] bg-[#F2F4F7] px-2 py-0.5 rounded-full text-[11px]">
+              <span className="inline-flex items-center gap-1 text-[#475467] bg-[#F8F9FC] border border-[#E4E7EC] px-2 py-0.5 rounded-full text-[11px]">
                 <CopyCheck className="w-3 h-3 text-[#667085]" />
-                {parsed.duplicateCount} duplicate{parsed.duplicateCount > 1 ? 's' : ''} deduplicated
+                {parsed.duplicateCount} duplicate{parsed.duplicateCount > 1 ? 's' : ''} removed
               </span>
             )}
+
             {isOverLimit && (
-              <span className="inline-flex items-center gap-1 text-[#B42318] bg-[#FEF3F2] px-2 py-0.5 rounded-full text-[11px] font-medium">
+              <span className="inline-flex items-center gap-1 text-[#B42318] bg-[#FEF3F2] border border-[#FECDCA] px-2 py-0.5 rounded-full text-[11px] font-medium">
                 <AlertCircle className="w-3 h-3 text-[#F04438]" />
-                Batch capped to {parsed.maxLimit} addresses
+                Batch capped to {parsed.maxLimit} max
               </span>
             )}
           </div>
 
-          <div className="text-[11px] text-[#98A2B3] hidden sm:block">
-            Supports newlines, commas, semicolons &amp; spaces
+          <div className="text-[11px] text-[#98A2B3] hidden md:block">
+            Supports newlines, commas, semicolons, and spaces
           </div>
         </div>
       </div>
 
-      {/* Warnings & Help Notice */}
+      {/* Overflow Warning */}
       {isOverLimit && (
-        <div className="mt-3 p-3 rounded-xl bg-[#FEF3F2] border border-[#FECDCA] text-xs text-[#B42318] flex items-center gap-2">
+        <div className="mt-2.5 p-2.5 rounded-xl bg-[#FEF3F2] border border-[#FECDCA] text-xs text-[#B42318] flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>
-            You entered {parsed.allEntries.length} addresses. The analyzer processes a maximum of {parsed.maxLimit} addresses per batch to guarantee stable DNS lookup performance.
+            Input contains {parsed.allEntries.length} addresses. The analyzer processes a maximum of {parsed.maxLimit} addresses per batch to guarantee stable DNS lookup performance.
           </span>
         </div>
       )}
 
-      {/* Submission Footer */}
-      <div className="mt-5 pt-4 border-t border-[#F2F4F7] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="text-xs text-[#667085] flex items-center gap-1.5">
-          <HelpCircle className="w-3.5 h-3.5 text-[#98A2B3] shrink-0" />
-          <span>No emails will be sent. Analysis is performed non-intrusively via DNS and RFC rules.</span>
+      {/* Execution Footer Bar */}
+      <div className="mt-3 pt-3 border-t border-[#F2F4F7] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="text-[11px] text-[#667085] flex items-center gap-1.5">
+          <ShieldCheck className="w-3.5 h-3.5 text-[#18794E] shrink-0" />
+          <span>Zero email traffic sent &bull; 100% non-intrusive DNS and RFC analysis</span>
         </div>
 
         <Button
@@ -142,7 +172,7 @@ export const EmailInput: React.FC<EmailInputProps> = ({
           isLoading={isAnalyzing}
           disabled={count === 0 || isAnalyzing}
           icon={<Play className="w-4 h-4 fill-current" />}
-          className="self-end sm:self-auto min-w-[160px]"
+          className="self-end sm:self-auto min-w-[160px] shadow-sm hover:shadow-md"
         >
           {isAnalyzing ? 'Analyzing...' : hasResults ? 'Re-analyze Emails' : 'Analyze Emails'}
         </Button>
@@ -150,3 +180,4 @@ export const EmailInput: React.FC<EmailInputProps> = ({
     </div>
   );
 };
+

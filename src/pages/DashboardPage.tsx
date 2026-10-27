@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft,
-  Download,
-  RotateCcw,
   AlertCircle,
   RefreshCw
 } from 'lucide-react';
@@ -90,39 +88,41 @@ export const DashboardPage: React.FC = () => {
       {/* Toast notifications container */}
       <Toast toasts={toasts} onDismiss={removeToast} />
 
-      {/* Detail Inspection Modal */}
+      {/* Right-Side Diagnostic Inspection Drawer */}
       <ResultDetails
         result={selectedResult}
         onClose={() => setSelectedResult(null)}
       />
 
-      {/* Dashboard Top Header */}
-      <section className="bg-white border-b border-[#E4E7EC]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            {/* Title & Navigation */}
+      {/* Compact Workspace Header */}
+      <section className="bg-white border-b border-[#E4E7EC] sticky top-16 z-30 shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* Left: Breadcrumbs & Context Title */}
             <div>
-              <div className="flex items-center gap-3 mb-1">
+              <div className="flex items-center gap-2 text-xs text-[#667085] mb-0.5">
                 <Link
                   to="/"
-                  className="inline-flex items-center gap-1 text-xs font-medium text-[#667085] hover:text-[#182230] transition-colors p-1 -ml-1 rounded focus:outline-none focus:ring-2 focus:ring-[#315EFB]"
+                  className="inline-flex items-center gap-1 font-medium hover:text-[#182230] transition-colors focus:outline-none focus:ring-1 focus:ring-[#315EFB] rounded p-0.5"
                 >
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Back to Home</span>
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>Landing</span>
                 </Link>
-                <span className="text-[#D0D5DD]">&bull;</span>
-                <span className="text-xs text-[#667085]">Analysis Workspace</span>
+                <span>/</span>
+                <span className="font-mono text-[#344054]">Diagnostics Workspace</span>
               </div>
 
-              <h1 className="text-2xl font-bold tracking-tight text-[#182230]">
-                Email Analysis
-              </h1>
-              <p className="text-xs sm:text-sm text-[#667085] mt-0.5">
-                Inspect syntax adherence, domain nameservers, and mail routing without sending test emails.
-              </p>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg sm:text-xl font-bold tracking-tight text-[#182230]">
+                  Email Intelligence Console
+                </h1>
+                <span className="hidden sm:inline-block text-[11px] font-mono px-2 py-0.5 rounded bg-[#F2F4F7] text-[#475467] border border-[#E4E7EC]">
+                  RFC 5321 / 5322 Engine
+                </span>
+              </div>
             </div>
 
-            {/* Real Backend Status Indicator */}
+            {/* Right: Live Backend Connection Status Indicator */}
             <div className="flex items-center gap-3 self-start sm:self-auto">
               <div
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs transition-all ${
@@ -153,21 +153,24 @@ export const DashboardPage: React.FC = () => {
                   )}
                 </div>
 
-                <div className="flex flex-col">
-                  <span className="font-semibold capitalize leading-none">
+                <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                  <span className="font-semibold">
                     {healthStatus === 'connected'
-                      ? 'Backend Connected'
+                      ? 'Backend Live'
                       : healthStatus === 'checking'
-                      ? 'Checking Backend...'
-                      : 'Backend Unavailable'}
+                      ? 'Checking API...'
+                      : 'Backend Offline'}
                   </span>
-                  <span className="text-[10px] opacity-80 font-mono mt-0.5">
-                    {apiBaseUrl} {healthData?.version ? `(v${healthData.version})` : ''}
-                  </span>
+                  {healthData?.version && (
+                    <span className="opacity-75 hidden md:inline">
+                      v{healthData.version}
+                    </span>
+                  )}
                 </div>
 
                 {healthStatus === 'unavailable' && (
                   <button
+                    type="button"
                     onClick={retryHealth}
                     className="p-1 hover:bg-[#FECDCA] rounded transition-colors text-[#B42318]"
                     title="Retry connecting to backend"
@@ -181,13 +184,13 @@ export const DashboardPage: React.FC = () => {
 
           {/* Backend Unavailable Banner Alert */}
           {healthStatus === 'unavailable' && (
-            <div className="mt-4 p-3 rounded-xl bg-[#FEF3F2] border border-[#FECDCA] text-xs text-[#B42318] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="mt-3 p-3 rounded-xl bg-[#FEF3F2] border border-[#FECDCA] text-xs text-[#B42318] flex flex-col sm:flex-row sm:items-center justify-between gap-2 animate-in fade-in">
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-semibold">Backend service unreachable:</span>{' '}
+                  <span className="font-semibold">FastAPI backend unreachable:</span>{' '}
                   {healthError || `Could not connect to ${apiBaseUrl}/health.`}{' '}
-                  Please verify that the FastAPI backend is running.
+                  Please verify that the backend process is running on port 8000.
                 </div>
               </div>
               <Button
@@ -205,8 +208,8 @@ export const DashboardPage: React.FC = () => {
       </section>
 
       {/* Main Workspace Body */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 flex-1 w-full">
-        {/* Section 1: Input Panel */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1 w-full">
+        {/* A. Compact Email Input Panel */}
         <EmailInput
           inputText={inputText}
           onChange={setInputText}
@@ -218,7 +221,7 @@ export const DashboardPage: React.FC = () => {
           hasResults={hasResults}
         />
 
-        {/* Section 2: Processing Timeline (Shown during or after analysis) */}
+        {/* B. Six-Stage Processing Pipeline (Collapses into horizontal strip on completion) */}
         {(isAnalyzing || hasResults || analysisError) && (
           <ProcessingTimeline
             stages={stages}
@@ -230,52 +233,17 @@ export const DashboardPage: React.FC = () => {
           />
         )}
 
-        {/* Section 3: Results Area */}
+        {/* C. Results Workspace: Summary Strip + Toolbar + Table */}
         {hasResults && analysisResponse && (
-          <div className="space-y-6 pt-4 border-t border-[#E4E7EC]/60 animate-in fade-in duration-300">
-            {/* Results Header with Actions */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold tracking-tight text-[#182230]">
-                  Analysis Results
-                </h2>
-                <p className="text-xs text-[#667085] mt-0.5">
-                  Real evidence retrieved from authoritative nameservers for {analysisResponse.results.length} address(es).
-                </p>
-              </div>
-
-              {/* Action Buttons: Export CSV & New Analysis */}
-              <div className="flex items-center gap-2.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleExportCsv}
-                  icon={<Download className="w-4 h-4 text-[#315EFB]" />}
-                  title="Export results table to an RFC-compliant CSV file"
-                >
-                  Export CSV
-                </Button>
-
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={resetAnalysis}
-                  icon={<RotateCcw className="w-3.5 h-3.5" />}
-                  title="Reset analysis workspace for a new batch"
-                >
-                  New Analysis
-                </Button>
-              </div>
-            </div>
-
-            {/* A. Summary Metrics Cards */}
+          <div className="space-y-4 pt-2 animate-in fade-in duration-300">
+            {/* 1. Compact Horizontal Summary Metrics */}
             <SummaryCard
               summary={analysisResponse.summary}
               onFilterSelect={(cat) => setFilterCategory(cat)}
               activeFilter={filterCategory}
             />
 
-            {/* B. Filter & Search Controls */}
+            {/* 2. Compact Results Toolbar (Heading, Count, Filter Tabs, Search, Export, Reset) */}
             <ResultsFilters
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
@@ -283,9 +251,11 @@ export const DashboardPage: React.FC = () => {
               onFilterChange={setFilterCategory}
               totalCount={analysisResponse.results.length}
               filteredCount={filteredResults.length}
+              onExportCsv={handleExportCsv}
+              onNewAnalysis={resetAnalysis}
             />
 
-            {/* C. Results Table or Filter Empty State */}
+            {/* 3. Results Table Positioned Immediately Below Toolbar */}
             {filteredResults.length > 0 ? (
               <ResultsTable
                 results={filteredResults}
@@ -311,7 +281,7 @@ export const DashboardPage: React.FC = () => {
           <div className="py-6">
             <EmptyState
               type="no_results"
-              title="Awaiting email addresses"
+              title="Awaiting email targets"
               description="Enter one or more email addresses in the panel above and click 'Analyze Emails' to view syntax verification, domain lookup, and MX record evidence."
               actionText="Load Sample Email Dataset"
               onAction={loadSampleData}
@@ -322,3 +292,4 @@ export const DashboardPage: React.FC = () => {
     </div>
   );
 };
+
