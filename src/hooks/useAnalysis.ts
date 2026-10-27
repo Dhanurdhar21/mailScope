@@ -5,9 +5,11 @@ import type {
   FilterCategory,
   TimelineStage
 } from '../types/analysis';
+import type { StoredAnalysisBatch } from '../types/history';
 import { parseEmailInput, SAMPLE_EMAILS } from '../services/emailParser';
 import type { ParsedEmailResult } from '../services/emailParser';
 import { analyzeEmailsApi } from '../services/api';
+import { historyStorage } from '../services/historyStorage';
 
 const INITIAL_STAGES: TimelineStage[] = [
   {
@@ -50,6 +52,9 @@ const INITIAL_STAGES: TimelineStage[] = [
 
 export function useAnalysis() {
   const [inputText, setInputText] = useState<string>('');
+  const [batchName, setBatchName] = useState<string>('');
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [lastSavedBatchId, setLastSavedBatchId] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [stages, setStages] = useState<TimelineStage[]>(INITIAL_STAGES);
   const [analysisResponse, setAnalysisResponse] = useState<AnalyzeResponse | null>(null);
@@ -72,12 +77,25 @@ export function useAnalysis() {
   // Load Sample Data
   const loadSampleData = useCallback(() => {
     setInputText(SAMPLE_EMAILS);
+    setBatchName('Sample Deliverability Test');
+    setCsvFileName(null);
     setAnalysisError(null);
   }, []);
 
   // Clear Input
   const clearInput = useCallback(() => {
     setInputText('');
+    setBatchName('');
+    setCsvFileName(null);
+    setAnalysisError(null);
+  }, []);
+
+  // Handle CSV loaded from uploader
+  const handleCsvLoaded = useCallback((emails: string[], filename: string) => {
+    setInputText(emails.join('\n'));
+    setCsvFileName(filename);
+    const defaultName = filename.replace(/\.(csv|txt)$/i, '');
+    setBatchName(`CSV: ${defaultName}`);
     setAnalysisError(null);
   }, []);
 
@@ -97,11 +115,32 @@ export function useAnalysis() {
     setSearchQuery('');
     setFilterCategory('all');
     setElapsedTimeMs(0);
+    setLastSavedBatchId(null);
   }, []);
 
-  // Run analysis
+  // Load a historical batch into workspace (NO new DNS queries)
+  const loadHistoricalBatch = useCallback((batch: StoredAnalysisBatch) => {
+    resetAnalysis();
+    setAnalysisResponse({
+      results: batch.results,
+      summary: batch.summary
+    });
+    setBatchName(batch.name);
+    setLastSavedBatchId(batch.id);
+    setElapsedTimeMs(batch.duration_ms || 0);
+    setStages(
+      INITIAL_STAGES.map((s) => ({
+        ...s,
+        status: 'completed',
+        note: `Snapshot "${batch.name}" (${new Date(batch.timestamp).toLocaleDateString()})`
+      }))
+    );
+  }, [resetAnalysis]);
+
+  // Run analysis (with automatic sequential chunking for batches > 200)
   const runAnalysis = useCallback(async () => {
-    if (parsedInput.uniqueEmails.length === 0 || isAnalyzing) {
+    const emails = parsedInput.uniqueEmails;
+    if (emails.length === 0 || isAnalyzing) {
       return;
     }
 
@@ -118,64 +157,151 @@ export function useAnalysis() {
     setAnalysisResponse(null);
     setSelectedResult(null);
     setElapsedTimeMs(0);
+    setLastSavedBatchId(null);
 
     const startTime = Date.now();
     timerIntervalRef.current = window.setInterval(() => {
       setElapsedTimeMs(Date.now() - startTime);
     }, 80);
 
-    // Initial stage update: Stage 1 completed (input accepted and normalized)
-    // Stages 2-5 are marked in_progress as the unified backend pipeline runs
+    const CHUNK_SIZE = 200;
+    const chunkCount = Math.ceil(emails.length / CHUNK_SIZE);
+
+    // Initial stage update: Stage 1 completed
     setStages((prev) =>
       prev.map((stage) => {
         if (stage.id === 1) {
           return {
             ...stage,
             status: 'completed',
-            note: `Accepted ${parsedInput.uniqueEmails.length} unique address(es)`
+            note: `Accepted ${emails.length} unique address(es)${chunkCount > 1 ? ` across ${chunkCount} chunks` : ''}`
           };
         }
         if (stage.id >= 2 && stage.id <= 5) {
-          return { ...stage, status: 'in_progress', note: 'Analysis pipeline in progress...' };
+          return {
+            ...stage,
+            status: 'in_progress',
+            note: chunkCount > 1 ? `Processing chunk 1 of ${chunkCount}...` : 'Analysis pipeline in progress...'
+          };
         }
         return { ...stage, status: 'pending', note: undefined };
       })
     );
 
+    const aggregatedResults: EmailAnalysisResult[] = [];
+    let totalApiDurationMs = 0;
+
     try {
-      const response = await analyzeEmailsApi(parsedInput.uniqueEmails, abortController.signal);
+      for (let c = 0; c < chunkCount; c++) {
+        const chunkEmails = emails.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
+
+        if (chunkCount > 1) {
+          setStages((prev) =>
+            prev.map((stage) => {
+              if (stage.id >= 2 && stage.id <= 5) {
+                return {
+                  ...stage,
+                  status: 'in_progress',
+                  note: `Analyzing chunk ${c + 1} of ${chunkCount} (${aggregatedResults.length}/${emails.length} addresses processed)...`
+                };
+              }
+              return stage;
+            })
+          );
+        }
+
+        const chunkResponse = await analyzeEmailsApi(chunkEmails, abortController.signal);
+        aggregatedResults.push(...chunkResponse.results);
+        totalApiDurationMs += chunkResponse.summary.duration_ms || 0;
+      }
 
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
       }
 
-      setElapsedTimeMs(response.summary.duration_ms || (Date.now() - startTime));
-      setAnalysisResponse(response);
+      const totalDuration = totalApiDurationMs || (Date.now() - startTime);
+      setElapsedTimeMs(totalDuration);
 
-      // Mark all stages completed with verified details from the actual response
+      // Compute combined summary
+      const delivered = aggregatedResults.filter((r) => r.classification === 'likely_to_be_delivered').length;
+      const bounce = aggregatedResults.filter((r) => r.classification === 'likely_to_bounce').length;
+      const unknown = aggregatedResults.filter((r) => r.classification === 'unknown').length;
+      const deliverabilityPct =
+        aggregatedResults.length > 0
+          ? Number(((delivered / aggregatedResults.length) * 100).toFixed(1))
+          : 0;
+
+      const finalResponse: AnalyzeResponse = {
+        results: aggregatedResults,
+        summary: {
+          total: aggregatedResults.length,
+          total_emails: aggregatedResults.length,
+          likely_to_be_delivered: delivered,
+          likely_to_bounce: bounce,
+          unknown: unknown,
+          deliverability_percentage: deliverabilityPct,
+          duration_ms: totalDuration
+        }
+      };
+
+      setAnalysisResponse(finalResponse);
+
+      // Save to localStorage history
+      try {
+        const saved = historyStorage.saveBatch(
+          finalResponse,
+          batchName.trim() || undefined,
+          csvFileName ? { filename: csvFileName, rowCount: emails.length } : undefined
+        );
+        setLastSavedBatchId(saved.id);
+      } catch (storageErr) {
+        console.warn('Storage persistence warning:', storageErr);
+      }
+
+      // Mark all stages completed
       setStages((prev) =>
         prev.map((stage) => {
           if (stage.id === 1) {
-            return { ...stage, status: 'completed', note: `Accepted ${parsedInput.uniqueEmails.length} unique address(es)` };
+            return {
+              ...stage,
+              status: 'completed',
+              note: `Accepted ${emails.length} unique address(es)`
+            };
           }
           if (stage.id === 2) {
-            return { ...stage, status: 'completed', note: `Validated ${response.results.length} addresses against RFC 5321/5322 syntax` };
+            return {
+              ...stage,
+              status: 'completed',
+              note: `Validated ${aggregatedResults.length} addresses against RFC 5321/5322 syntax`
+            };
           }
           if (stage.id === 3) {
-            return { ...stage, status: 'completed', note: `Authoritative DNS inspected with concurrency control` };
+            return {
+              ...stage,
+              status: 'completed',
+              note: `Authoritative DNS inspected with concurrency control`
+            };
           }
           if (stage.id === 4) {
-            return { ...stage, status: 'completed', note: `Evaluated MX routing and fallback records` };
+            return {
+              ...stage,
+              status: 'completed',
+              note: `Evaluated MX routing and fallback records`
+            };
           }
           if (stage.id === 5) {
             return {
               ...stage,
               status: 'completed',
-              note: `${response.summary.likely_to_be_delivered} deliverable, ${response.summary.likely_to_bounce} bounce, ${response.summary.unknown} unknown`
+              note: `${delivered} deliverable, ${bounce} bounce, ${unknown} unknown`
             };
           }
           if (stage.id === 6) {
-            return { ...stage, status: 'completed', note: `Completed in ${response.summary.duration_ms}ms` };
+            return {
+              ...stage,
+              status: 'completed',
+              note: `Completed in ${totalDuration}ms`
+            };
           }
           return { ...stage, status: 'completed' };
         })
@@ -190,7 +316,31 @@ export function useAnalysis() {
       }
 
       const message = err.message || 'An error occurred during deliverability analysis.';
-      setAnalysisError(message);
+      
+      // If we got partial results from completed chunks, keep them
+      if (aggregatedResults.length > 0) {
+        const delivered = aggregatedResults.filter((r) => r.classification === 'likely_to_be_delivered').length;
+        const bounce = aggregatedResults.filter((r) => r.classification === 'likely_to_bounce').length;
+        const unknown = aggregatedResults.filter((r) => r.classification === 'unknown').length;
+        const partialResponse: AnalyzeResponse = {
+          results: aggregatedResults,
+          summary: {
+            total: aggregatedResults.length,
+            total_emails: aggregatedResults.length,
+            likely_to_be_delivered: delivered,
+            likely_to_bounce: bounce,
+            unknown: unknown,
+            deliverability_percentage: Number(((delivered / aggregatedResults.length) * 100).toFixed(1)),
+            duration_ms: totalApiDurationMs || (Date.now() - startTime)
+          }
+        };
+        setAnalysisResponse(partialResponse);
+        setAnalysisError(
+          `Analysis partially completed: ${aggregatedResults.length} of ${emails.length} addresses processed. Network error: ${message}`
+        );
+      } else {
+        setAnalysisError(message);
+      }
 
       // Mark in-progress stages as failed
       setStages((prev) =>
@@ -204,7 +354,7 @@ export function useAnalysis() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [parsedInput.uniqueEmails, isAnalyzing]);
+  }, [parsedInput.uniqueEmails, isAnalyzing, batchName, csvFileName]);
 
   // Filtered and searched results
   const filteredResults = useMemo(() => {
@@ -234,6 +384,12 @@ export function useAnalysis() {
   return {
     inputText,
     setInputText,
+    batchName,
+    setBatchName,
+    csvFileName,
+    handleCsvLoaded,
+    lastSavedBatchId,
+    loadHistoricalBatch,
     parsedInput,
     isAnalyzing,
     stages,

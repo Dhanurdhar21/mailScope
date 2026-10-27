@@ -4,6 +4,8 @@ import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { LandingPage } from './pages/LandingPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { HistoryPage } from './pages/HistoryPage';
+import { ComparePage } from './pages/ComparePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 // Scroll to top on route change
@@ -27,6 +29,8 @@ export function App() {
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/compare" element={<ComparePage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>

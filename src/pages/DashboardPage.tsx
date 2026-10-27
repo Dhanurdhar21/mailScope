@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import {
   ArrowLeft,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  History
 } from 'lucide-react';
 import { useAnalysis } from '../hooks/useAnalysis';
 import { useBackendHealth } from '../hooks/useBackendHealth';
@@ -20,9 +21,13 @@ import { Toast } from '../components/Toast';
 import type { ToastMessage } from '../components/Toast';
 
 export const DashboardPage: React.FC = () => {
+  const location = useLocation();
   const {
     inputText,
     setInputText,
+    batchName,
+    handleCsvLoaded,
+    loadHistoricalBatch,
     parsedInput,
     isAnalyzing,
     stages,
@@ -41,6 +46,22 @@ export const DashboardPage: React.FC = () => {
     resetAnalysis,
     runAnalysis
   } = useAnalysis();
+
+  const [isHistoricalView, setIsHistoricalView] = useState(false);
+  const [historicalTimestamp, setHistoricalTimestamp] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (location.state?.historicalBatch) {
+      loadHistoricalBatch(location.state.historicalBatch);
+      setIsHistoricalView(true);
+      setHistoricalTimestamp(location.state.historicalBatch.timestamp);
+      addToast('info', `Loaded historical snapshot: "${location.state.historicalBatch.name}"`);
+    } else if (location.state?.reanalyzeEmail) {
+      setInputText(location.state.reanalyzeEmail);
+      setIsHistoricalView(false);
+      setHistoricalTimestamp(undefined);
+    }
+  }, [location.state, loadHistoricalBatch, setInputText]);
 
   const {
     status: healthStatus,
@@ -92,6 +113,14 @@ export const DashboardPage: React.FC = () => {
       <ResultDetails
         result={selectedResult}
         onClose={() => setSelectedResult(null)}
+        isHistorical={isHistoricalView}
+        savedAt={historicalTimestamp}
+        onReanalyze={(email) => {
+          setSelectedResult(null);
+          setIsHistoricalView(false);
+          setInputText(email);
+          addToast('info', `Loaded ${email} for live analysis. Click Analyze Emails.`);
+        }}
       />
 
       {/* Compact Workspace Header */}
@@ -209,6 +238,33 @@ export const DashboardPage: React.FC = () => {
 
       {/* Main Workspace Body */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1 w-full">
+        {/* Historical Snapshot Banner */}
+        {isHistoricalView && (
+          <div className="p-3.5 rounded-xl bg-[#F4F3FF] border border-[#D9D6FE] text-[#5925DC] text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 shrink-0" />
+              <div>
+                <strong>Viewing Historical Analysis:</strong> &quot;{batchName}&quot; (Saved {historicalTimestamp ? new Date(historicalTimestamp).toLocaleString() : ''}).
+                <span className="block text-[11px] opacity-80">
+                  Displaying saved records without performing new DNS lookups.
+                </span>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setIsHistoricalView(false);
+                setHistoricalTimestamp(undefined);
+                resetAnalysis();
+              }}
+              className="shrink-0 self-end sm:self-auto bg-white"
+            >
+              Start New Live Analysis
+            </Button>
+          </div>
+        )}
+
         {/* A. Compact Email Input Panel */}
         <EmailInput
           inputText={inputText}
@@ -219,6 +275,7 @@ export const DashboardPage: React.FC = () => {
           onLoadSample={loadSampleData}
           onClear={clearInput}
           hasResults={hasResults}
+          onCsvLoaded={handleCsvLoaded}
         />
 
         {/* B. Six-Stage Processing Pipeline (Collapses into horizontal strip on completion) */}

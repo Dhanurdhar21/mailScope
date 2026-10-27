@@ -7,6 +7,9 @@ export const Navbar: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const isDashboard = location.pathname === '/dashboard';
+  const isHistory = location.pathname === '/history';
+  const isCompare = location.pathname === '/compare';
+  const isAppView = isDashboard || isHistory || isCompare;
 
   return (
     <header className="sticky top-0 z-40 w-full bg-white/90 backdrop-blur-md border-b border-[#E4E7EC]">
@@ -31,8 +34,8 @@ export const Navbar: React.FC = () => {
           </Link>
 
           {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-[#475467]">
-            {!isDashboard ? (
+          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-[#475467]">
+            {!isAppView ? (
               <>
                 <a
                   href="#overview"
@@ -52,20 +55,58 @@ export const Navbar: React.FC = () => {
                 >
                   Capabilities
                 </a>
-                <a
-                  href="#classifications"
+                <Link
+                  to="/history"
                   className="hover:text-[#182230] transition-colors py-1 focus-visible:ring-1 focus-visible:ring-[#315EFB] rounded"
                 >
-                  Classifications
-                </a>
+                  History
+                </Link>
+                <Link
+                  to="/compare"
+                  className="hover:text-[#182230] transition-colors py-1 focus-visible:ring-1 focus-visible:ring-[#315EFB] rounded"
+                >
+                  Compare
+                </Link>
               </>
             ) : (
-              <Link
-                to="/"
-                className="hover:text-[#182230] transition-colors py-1"
-              >
-                Back to Product Overview
-              </Link>
+              <>
+                <Link
+                  to="/dashboard"
+                  className={`py-1 transition-colors ${
+                    isDashboard
+                      ? 'text-[#315EFB] font-semibold border-b-2 border-[#315EFB]'
+                      : 'hover:text-[#182230]'
+                  }`}
+                >
+                  Analyzer
+                </Link>
+                <Link
+                  to="/history"
+                  className={`py-1 transition-colors ${
+                    isHistory
+                      ? 'text-[#315EFB] font-semibold border-b-2 border-[#315EFB]'
+                      : 'hover:text-[#182230]'
+                  }`}
+                >
+                  History
+                </Link>
+                <Link
+                  to="/compare"
+                  className={`py-1 transition-colors ${
+                    isCompare
+                      ? 'text-[#315EFB] font-semibold border-b-2 border-[#315EFB]'
+                      : 'hover:text-[#182230]'
+                  }`}
+                >
+                  Compare
+                </Link>
+                <Link
+                  to="/"
+                  className="hover:text-[#182230] transition-colors py-1 text-xs text-[#667085]"
+                >
+                  Product Overview
+                </Link>
+              </>
             )}
           </nav>
 
@@ -82,9 +123,9 @@ export const Navbar: React.FC = () => {
                 </Button>
               </Link>
             ) : (
-              <Link to="/">
+              <Link to="/history">
                 <Button variant="outline" size="sm">
-                  Exit to Landing
+                  View History
                 </Button>
               </Link>
             )}
@@ -107,53 +148,40 @@ export const Navbar: React.FC = () => {
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
         <div className="md:hidden bg-white border-b border-[#E4E7EC] px-4 pt-3 pb-5 space-y-3 shadow-lg">
-          {!isDashboard ? (
-            <>
-              <a
-                href="#overview"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block py-2 text-base font-medium text-[#344054] hover:text-[#182230]"
-              >
-                Overview
-              </a>
-              <a
-                href="#how-it-works"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block py-2 text-base font-medium text-[#344054] hover:text-[#182230]"
-              >
-                How It Works
-              </a>
-              <a
-                href="#capabilities"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block py-2 text-base font-medium text-[#344054] hover:text-[#182230]"
-              >
-                Capabilities
-              </a>
-              <a
-                href="#classifications"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block py-2 text-base font-medium text-[#344054] hover:text-[#182230]"
-              >
-                Classifications
-              </a>
-              <div className="pt-2">
-                <Link to="/dashboard" onClick={() => setMobileMenuOpen(false)}>
-                  <Button className="w-full" size="md">
-                    Open Analyzer
-                  </Button>
-                </Link>
-              </div>
-            </>
-          ) : (
-            <div className="pt-2">
-              <Link to="/" onClick={() => setMobileMenuOpen(false)}>
-                <Button variant="outline" className="w-full" size="md">
-                  Back to Landing Page
-                </Button>
-              </Link>
-            </div>
-          )}
+          <Link
+            to="/dashboard"
+            onClick={() => setMobileMenuOpen(false)}
+            className={`block py-2 text-base font-medium ${
+              isDashboard ? 'text-[#315EFB] font-semibold' : 'text-[#344054] hover:text-[#182230]'
+            }`}
+          >
+            Analyzer Workspace
+          </Link>
+          <Link
+            to="/history"
+            onClick={() => setMobileMenuOpen(false)}
+            className={`block py-2 text-base font-medium ${
+              isHistory ? 'text-[#315EFB] font-semibold' : 'text-[#344054] hover:text-[#182230]'
+            }`}
+          >
+            Analysis History
+          </Link>
+          <Link
+            to="/compare"
+            onClick={() => setMobileMenuOpen(false)}
+            className={`block py-2 text-base font-medium ${
+              isCompare ? 'text-[#315EFB] font-semibold' : 'text-[#344054] hover:text-[#182230]'
+            }`}
+          >
+            Compare Batches
+          </Link>
+          <div className="pt-2 border-t border-[#F2F4F7]">
+            <Link to="/" onClick={() => setMobileMenuOpen(false)}>
+              <Button variant="outline" className="w-full" size="md">
+                Product Landing Page
+              </Button>
+            </Link>
+          </div>
         </div>
       )}
     </header>

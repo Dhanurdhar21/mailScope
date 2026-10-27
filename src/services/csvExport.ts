@@ -32,6 +32,8 @@ export function sanitizeCsvCell(value: unknown): string {
   return `"${escaped}"`;
 }
 
+export const escapeCsvField = sanitizeCsvCell;
+
 /**
  * Converts email analysis results into a clean, downloadable CSV string.
  */
@@ -101,3 +103,6 @@ export function downloadCsvFile(results: EmailAnalysisResult[], filenamePrefix: 
 
   return true;
 }
+
+export { generateComparisonCsv, downloadComparisonCsvFile } from './comparison';
+

@@ -10,7 +10,10 @@ import {
   XCircle,
   HelpCircle,
   Shield,
-  ArrowRight
+  ArrowRight,
+  RotateCcw,
+  History,
+  AlertOctagon
 } from 'lucide-react';
 import type { EmailAnalysisResult } from '../types/analysis';
 import { StatusBadge } from './StatusBadge';
@@ -19,9 +22,18 @@ import { Button } from './Button';
 interface ResultDetailsProps {
   result: EmailAnalysisResult | null;
   onClose: () => void;
+  isHistorical?: boolean;
+  savedAt?: number;
+  onReanalyze?: (email: string) => void;
 }
 
-export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose }) => {
+export const ResultDetails: React.FC<ResultDetailsProps> = ({
+  result,
+  onClose,
+  isHistorical = false,
+  savedAt,
+  onReanalyze
+}) => {
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -36,7 +48,6 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
     if (result) {
       window.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
-      // Focus the close button for accessibility
       setTimeout(() => closeButtonRef.current?.focus(), 50);
     }
 
@@ -50,6 +61,10 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
 
   const mxRecords = result.diagnostics?.mx_records || [];
   const isNullMx = mxRecords.some((r) => r.trim() === '.' || r.includes(' .') || r.startsWith('0 .'));
+  const hasFallbackA = result.diagnostics?.has_fallback_a ?? false;
+  const isTimeout = result.domain_status === 'timeout' || result.mx_status === 'timeout';
+  const isNxDomain = result.domain_status === 'nonexistent';
+  const isResolved = result.domain_status === 'resolved';
 
   return (
     <div
@@ -73,11 +88,17 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
         {/* Drawer Header */}
         <div className="p-5 border-b border-[#E4E7EC] bg-[#F8F9FC] shrink-0">
           <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-mono uppercase tracking-wider font-semibold text-[#667085] bg-white px-2 py-0.5 rounded border border-[#E4E7EC]">
-                Diagnostic Dossier
+                Domain Intelligence Dossier
               </span>
               <StatusBadge type="classification" value={result.classification} size="sm" />
+              {isHistorical && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#F4F3FF] text-[#5925DC] border border-[#D9D6FE]">
+                  <History className="w-3 h-3" />
+                  Historical Snapshot
+                </span>
+              )}
             </div>
 
             <button
@@ -97,14 +118,21 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
             {result.email}
           </h2>
 
-          {result.domain && (
-            <p className="text-xs text-[#667085] font-mono mt-0.5">
-              Domain: <strong className="text-[#344054]">{result.domain}</strong>
-            </p>
-          )}
+          <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-[#667085] font-mono">
+            {result.domain && (
+              <span>
+                Domain: <strong className="text-[#344054]">{result.domain}</strong>
+              </span>
+            )}
+            {savedAt && (
+              <span className="text-[11px] text-[#98A2B3]">
+                Snapshot Date: {new Date(savedAt).toLocaleString()}
+              </span>
+            )}
+          </div>
         </div>
 
-        {/* Scrollable Content: 7 Structured Diagnostic Sections */}
+        {/* Scrollable Content: Domain Intelligence & RFC Diagnostic Sections */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6 text-sm divide-y divide-[#F2F4F7]">
           {/* Section 1: Classification & Technical Reason */}
           <div className="space-y-3">
@@ -135,12 +163,12 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
             </div>
           </div>
 
-          {/* Section 2: Syntax Validation */}
+          {/* Section 2: RFC 5322 Syntax Validation */}
           <div className="pt-6 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-[#344054] flex items-center gap-1.5">
                 <FileCode className="w-4 h-4 text-[#667085]" />
-                2. RFC 5322 Syntax Validation
+                2. RFC 5322 Syntax Inspection
               </h3>
               <StatusBadge type="syntax" value={result.syntax_valid} size="sm" />
             </div>
@@ -148,20 +176,27 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
             <div className="p-4 rounded-xl border border-[#E4E7EC] bg-white space-y-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
-                  <span className="text-[#667085] block">Syntax Status:</span>
+                  <span className="text-[#667085] block">Syntax Conformance:</span>
                   <span className="font-semibold text-[#182230]">
                     {result.syntax_valid ? 'Valid RFC 5321/5322 structure' : 'RFC Specification Violation'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-[#667085] block">Structural Check:</span>
+                  <span className="text-[#667085] block">Structural Finding:</span>
                   <span className="font-mono text-[#344054]">
-                    {result.syntax_valid ? 'Pass (dot-atom & length limits)' : (result.diagnostics?.syntax_error || 'Malformed')}
+                    {result.syntax_valid
+                      ? 'Pass (Length limits & dot-atom)'
+                      : (result.diagnostics?.syntax_error || 'Malformed address format')}
                   </span>
                 </div>
               </div>
+              {!result.syntax_valid && result.diagnostics?.syntax_error && (
+                <div className="p-2.5 rounded-lg bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] text-xs mt-2">
+                  <strong>Specific Syntax Error:</strong> {result.diagnostics.syntax_error}
+                </div>
+              )}
               <p className="text-[11px] text-[#667085] pt-1 border-t border-[#F2F4F7]">
-                Enforces local-part &le; 64 chars, domain &le; 253 chars, dot-atom boundaries, and IDNA/Punycode compliance.
+                Evaluates total address length &le; 254, local-part &le; 64, domain &le; 253, and IDNA/Punycode encoding.
               </p>
             </div>
           </div>
@@ -180,47 +215,76 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
               <div className="flex items-center justify-between">
                 <span className="text-[#667085]">Authoritative DNS State:</span>
                 <span className="font-mono font-semibold text-[#182230]">
-                  {result.domain_status === 'resolved'
+                  {isResolved
                     ? 'NOERROR (Active Domain)'
-                    : result.domain_status === 'nonexistent'
-                    ? 'NXDOMAIN (Non-Existent)'
-                    : result.domain_status === 'timeout'
+                    : isNxDomain
+                    ? 'NXDOMAIN (Non-Existent Domain)'
+                    : isTimeout
                     ? 'TIMEOUT (Nameserver Unresponsive)'
                     : 'UNRESOLVED'}
                 </span>
               </div>
-              <p className="text-[11px] text-[#475467]">
-                {result.domain_status === 'resolved'
-                  ? `The domain "${result.domain}" exists and responds authoritatively to DNS requests.`
-                  : result.domain_status === 'nonexistent'
-                  ? `The domain "${result.domain}" has no registered authoritative nameservers (NXDOMAIN).`
-                  : 'Authoritative nameservers timed out during resolution.'}
-              </p>
+
+              {/* Explicit Technical DNS Outcomes */}
+              {isNxDomain && (
+                <div className="p-3 rounded-lg bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] space-y-1">
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <XCircle className="w-4 h-4" />
+                    Confirmed Non-Existent Domain (NXDOMAIN)
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    Authoritative nameservers positively confirmed that &quot;{result.domain}&quot; does not exist in the DNS registry hierarchy. Outbound mail routing is structurally impossible.
+                  </p>
+                </div>
+              )}
+
+              {isTimeout && (
+                <div className="p-3 rounded-lg bg-[#FFFAEB] border border-[#FEDF89] text-[#9A6700] space-y-1">
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <AlertOctagon className="w-4 h-4" />
+                    DNS Timeout / Resolver Failure
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    The authoritative nameservers did not respond within the query lifetime timeout. <strong>Important:</strong> This represents a temporary network resolution failure and does NOT prove that the domain does not exist.
+                  </p>
+                </div>
+              )}
+
+              {isResolved && (
+                <p className="text-[11px] text-[#475467]">
+                  The domain &quot;{result.domain}&quot; is registered and authoritative nameservers respond with valid resource records.
+                </p>
+              )}
             </div>
           </div>
 
-          {/* Section 4: Mail-Routing Evidence */}
+          {/* Section 4: Mail-Routing Evidence & Null MX Distinction */}
           <div className="pt-6 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-[#344054] flex items-center gap-1.5">
                 <Shield className="w-4 h-4 text-[#667085]" />
-                4. Mail-Routing (MX) Evidence
+                4. Mail-Routing (MX) Evidence &amp; Intelligence
               </h3>
               <StatusBadge type="mx" value={result.mx_status} size="sm" />
             </div>
 
             <div className="p-4 rounded-xl border border-[#E4E7EC] bg-white space-y-2.5 text-xs">
+              {/* Distinct Case A: RFC 7505 Null MX Published */}
               {isNullMx ? (
-                <div className="p-3 rounded-lg bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] space-y-1">
-                  <div className="font-semibold flex items-center gap-1.5">
-                    <XCircle className="w-4 h-4" />
-                    RFC 7505 Null MX Published
+                <div className="p-3.5 rounded-lg bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] space-y-1.5">
+                  <div className="font-semibold flex items-center gap-1.5 text-xs">
+                    <XCircle className="w-4 h-4 shrink-0" />
+                    RFC 7505 Null MX Record Published
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    This domain explicitly publishes a Null MX record (preference 0, target &quot;.&quot;) declaring that it refuses all incoming message traffic.
+                    This domain explicitly publishes a Null MX record (<code className="font-mono bg-white px-1 py-0.5 rounded border border-[#FECDCA]">0 .</code>) to advertise to all internet mail systems that it does <em>not</em> accept any incoming email.
+                  </p>
+                  <p className="text-[10px] opacity-90">
+                    Standard compliant MTAs will immediately reject or bounce messages sent to this domain without attempting network transmission.
                   </p>
                 </div>
-              ) : result.mx_status === 'present' ? (
+              ) : result.mx_status === 'present' && mxRecords.length > 0 ? (
+                /* Distinct Case B: Active MX Records Present */
                 <div>
                   <p className="text-[#344054] font-medium">
                     Active mail exchange servers discovered ({mxRecords.length}):
@@ -229,20 +293,28 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
                     Records sorted by numerical MX preference priority (lowest preference value = highest routing priority).
                   </p>
                 </div>
-              ) : result.diagnostics?.has_fallback_a ? (
-                <div className="p-3 rounded-lg bg-[#FFFAEB] border border-[#FEDF89] text-[#9A6700] space-y-1">
-                  <div className="font-semibold flex items-center gap-1.5">
-                    <HelpCircle className="w-4 h-4" />
-                    RFC 5321 Implicit A/AAAA Fallback Routing
+              ) : hasFallbackA ? (
+                /* Distinct Case C: RFC 5321 Fallback Routing (No MX, but A/AAAA present) */
+                <div className="p-3.5 rounded-lg bg-[#FFFAEB] border border-[#FEDF89] text-[#9A6700] space-y-1.5">
+                  <div className="font-semibold flex items-center gap-1.5 text-xs">
+                    <HelpCircle className="w-4 h-4 shrink-0" />
+                    RFC 5321 Implicit Fallback Routing
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    No dedicated MX records exist, but the domain has active host address (A/AAAA) records available for legacy mail routing.
+                    No dedicated MX records exist for this domain. However, direct host address (A/AAAA) records are active. Under RFC 5321 Section 5.1, mail clients may attempt delivery directly to the host IP.
                   </p>
                 </div>
               ) : (
-                <p className="text-[#667085]">
-                  No MX records or fallback address records exist for this domain. Messages cannot be routed.
-                </p>
+                /* Distinct Case D: Empty MX with No Fallback */
+                <div className="p-3.5 rounded-lg bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] space-y-1">
+                  <div className="font-semibold flex items-center gap-1.5 text-xs">
+                    <XCircle className="w-4 h-4 shrink-0" />
+                    Empty MX Response &amp; No Fallback Host
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    Authoritative nameservers returned 0 MX records and 0 A/AAAA fallback host records. Mail systems have no destination IP to deliver messages.
+                  </p>
+                </div>
               )}
             </div>
           </div>
@@ -276,7 +348,7 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
               </div>
             ) : (
               <div className="p-3.5 rounded-xl bg-[#F8F9FC] border border-[#E4E7EC] text-xs text-[#667085]">
-                {result.diagnostics?.has_fallback_a
+                {hasFallbackA
                   ? 'DNS query returned 0 MX records. Evaluated direct host address fallback.'
                   : 'DNS query returned 0 MX records and 0 A/AAAA fallback host records.'}
               </div>
@@ -297,9 +369,13 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
                   Confirmed Finding:
                 </span>
                 <p className="text-[11px] text-[#344054] leading-relaxed">
-                  {result.domain_status === 'resolved'
+                  {isResolved
                     ? 'The domain is registered and nameservers respond with definitive routing records.'
-                    : 'The domain does not exist or authoritative nameservers returned NXDOMAIN.'}
+                    : isNxDomain
+                    ? 'The domain does not exist (authoritative nameservers returned NXDOMAIN).'
+                    : isTimeout
+                    ? 'Authoritative nameservers timed out during resolution.'
+                    : 'Unresolved domain status.'}
                 </p>
               </div>
 
@@ -321,7 +397,7 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
 
           {/* Section 7: Limitations & Mailbox Verification Disclaimer */}
           <div className="pt-6 space-y-3">
-            <div className="p-4 rounded-xl bg-[#FFFAEB] border border-[#FEDF89] text-xs text-[#7A3E00] space-y-1.5">
+            <div className="p-4 rounded-xl bg-[#FFFAEB] border border-[#FEDF89] text-xs text-[#7A3E00] space-y-2">
               <div className="font-semibold flex items-center gap-1.5">
                 <AlertTriangle className="w-4 h-4 text-[#9A6700] shrink-0" />
                 7. Technical Scope &amp; Deliverability Limitations
@@ -330,7 +406,7 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
                 <strong>Individual Mailbox Existence:</strong> MailScope performs non-intrusive DNS and RFC analysis. The actual existence of this individual recipient inbox on the destination server <em>cannot be verified without sending message traffic</em>.
               </p>
               <p className="leading-relaxed text-[11px] opacity-90">
-                Catch-all servers, full mailboxes, spam filters, and internal organizational policies can still affect actual delivery.
+                <strong>No SMTP Connection Testing:</strong> MailScope evaluates DNS resource records and RFC syntax non-intrusively without establishing SMTP handshakes or sending probe traffic.
               </p>
             </div>
           </div>
@@ -338,9 +414,19 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
 
         {/* Drawer Footer Actions */}
         <div className="p-4 border-t border-[#E4E7EC] bg-[#F8F9FC] flex items-center justify-between shrink-0">
-          <span className="text-[11px] text-[#667085] font-mono">
-            ID: {result.email.slice(0, 20)}...
-          </span>
+          <div className="flex items-center gap-2">
+            {isHistorical && onReanalyze && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onReanalyze(result.email)}
+                icon={<RotateCcw className="w-3.5 h-3.5 text-[#315EFB]" />}
+                title="Send address to Dashboard to run fresh live DNS analysis"
+              >
+                Reanalyze Live
+              </Button>
+            )}
+          </div>
           <Button variant="outline" size="sm" onClick={onClose}>
             Close Drawer
           </Button>
@@ -349,4 +435,5 @@ export const ResultDetails: React.FC<ResultDetailsProps> = ({ result, onClose })
     </div>
   );
 };
+
 

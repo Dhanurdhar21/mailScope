@@ -7,9 +7,12 @@ import {
   CopyCheck,
   Maximize2,
   Minimize2,
-  ShieldCheck
+  ShieldCheck,
+  Terminal,
+  Upload
 } from 'lucide-react';
 import { Button } from './Button';
+import { CsvBatchUploader } from './CsvBatchUploader';
 import type { ParsedEmailResult } from '../services/emailParser';
 
 interface EmailInputProps {
@@ -21,6 +24,7 @@ interface EmailInputProps {
   onLoadSample: () => void;
   onClear: () => void;
   hasResults: boolean;
+  onCsvLoaded?: (emails: string[], filename: string) => void;
 }
 
 export const EmailInput: React.FC<EmailInputProps> = ({
@@ -31,17 +35,27 @@ export const EmailInput: React.FC<EmailInputProps> = ({
   onAnalyze,
   onLoadSample,
   onClear,
-  hasResults
+  hasResults,
+  onCsvLoaded
 }) => {
+  const [activeTab, setActiveTab] = useState<'manual' | 'csv'>('manual');
   const [isExpanded, setIsExpanded] = useState(false);
   const count = parsed.uniqueEmails.length;
   const isOverLimit = parsed.exceedsLimit;
   const hasDuplicates = parsed.duplicateCount > 0;
 
+  const handleCsvAddressesSelected = (emails: string[], filename: string) => {
+    onChange(emails.join('\n'));
+    if (onCsvLoaded) {
+      onCsvLoaded(emails, filename);
+    }
+    setActiveTab('manual');
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-[#E4E7EC] p-4 sm:p-5 shadow-xs transition-all">
-      {/* Top Bar: Title & Quick Shortcuts */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+      {/* Top Bar: Title & Mode Switcher */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-[#EFF8FF] text-[#315EFB] flex items-center justify-center font-bold text-xs border border-[#B2DDFF]/60 shrink-0">
             &gt;_
@@ -56,50 +70,87 @@ export const EmailInput: React.FC<EmailInputProps> = ({
           </div>
         </div>
 
-        {/* Action Shortcuts */}
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        {/* Tab Switcher: Direct Text vs CSV Upload */}
+        <div className="flex items-center gap-1 p-1 bg-[#F2F4F7] rounded-xl border border-[#E4E7EC] self-start sm:self-auto">
           <button
             type="button"
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-[#475467] bg-[#F8F9FC] hover:bg-[#F2F4F7] border border-[#E4E7EC] rounded-lg transition-colors"
-            title={isExpanded ? 'Collapse input area' : 'Expand input area'}
+            onClick={() => setActiveTab('manual')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeTab === 'manual'
+                ? 'bg-white text-[#182230] shadow-xs'
+                : 'text-[#667085] hover:text-[#182230]'
+            }`}
           >
-            {isExpanded ? (
-              <>
-                <Minimize2 className="w-3.5 h-3.5 text-[#667085]" />
-                <span className="hidden sm:inline">Compact</span>
-              </>
-            ) : (
-              <>
-                <Maximize2 className="w-3.5 h-3.5 text-[#667085]" />
-                <span className="hidden sm:inline">Expand</span>
-              </>
-            )}
+            <Terminal className="w-3.5 h-3.5" />
+            <span>Direct Input</span>
           </button>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onLoadSample}
-            disabled={isAnalyzing}
-            icon={<Sparkles className="w-3.5 h-3.5 text-[#315EFB]" />}
-            title="Populate input with real and invalid sample email addresses"
+          <button
+            type="button"
+            onClick={() => setActiveTab('csv')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeTab === 'csv'
+                ? 'bg-white text-[#182230] shadow-xs'
+                : 'text-[#667085] hover:text-[#182230]'
+            }`}
           >
-            Load Sample
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClear}
-            disabled={isAnalyzing || !inputText}
-            icon={<Trash2 className="w-3.5 h-3.5 text-[#667085]" />}
-            title="Clear all entered text"
-          >
-            Clear
-          </Button>
+            <Upload className="w-3.5 h-3.5" />
+            <span>Import CSV</span>
+          </button>
         </div>
       </div>
+
+      {/* CSV Batch Uploader Tab View */}
+      {activeTab === 'csv' ? (
+        <CsvBatchUploader
+          onAddressesSelected={handleCsvAddressesSelected}
+          disabled={isAnalyzing}
+        />
+      ) : (
+        /* Manual Direct Input Tab View */
+        <>
+          {/* Action Shortcuts */}
+          <div className="flex items-center justify-end gap-2 mb-2.5">
+            <button
+              type="button"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-[#475467] bg-[#F8F9FC] hover:bg-[#F2F4F7] border border-[#E4E7EC] rounded-lg transition-colors"
+              title={isExpanded ? 'Collapse input area' : 'Expand input area'}
+            >
+              {isExpanded ? (
+                <>
+                  <Minimize2 className="w-3.5 h-3.5 text-[#667085]" />
+                  <span className="hidden sm:inline">Compact</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="w-3.5 h-3.5 text-[#667085]" />
+                  <span className="hidden sm:inline">Expand</span>
+                </>
+              )}
+            </button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onLoadSample}
+              disabled={isAnalyzing}
+              icon={<Sparkles className="w-3.5 h-3.5 text-[#315EFB]" />}
+              title="Populate input with real and invalid sample email addresses"
+            >
+              Load Sample
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClear}
+              disabled={isAnalyzing || !inputText}
+              icon={<Trash2 className="w-3.5 h-3.5 text-[#667085]" />}
+              title="Clear all entered text"
+            >
+              Clear
+            </Button>
+          </div>
 
       {/* Textarea Input Field */}
       <div className="relative">
@@ -177,7 +228,9 @@ export const EmailInput: React.FC<EmailInputProps> = ({
           {isAnalyzing ? 'Analyzing...' : hasResults ? 'Re-analyze Emails' : 'Analyze Emails'}
         </Button>
       </div>
-    </div>
+    </>
+  )}
+</div>
   );
 };
 

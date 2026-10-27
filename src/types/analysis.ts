@@ -47,6 +47,8 @@ export interface SummaryMetrics {
   likely_to_bounce: number;
   unknown: number;
   duration_ms: number;
+  total_emails?: number;
+  deliverability_percentage?: number;
 }
 
 export interface AnalyzeResponse {
