@@ -20,6 +20,7 @@ During this formal pre-release quality gate audit, **7 distinct defects** were i
 | **DEFECT-06** | **P2 (Medium)** | UI Deception / UX | **RESOLVED** | `src/hooks/useAnalysis.ts` | Code inspection & Browser E2E |
 | **DEFECT-07** | **P2 (Medium)** | Schema Inconsistency | **RESOLVED** | `backend/models.py` | `tests/test_api.py::test_frontend_schema_contract` |
 | **DEFECT-08** | **P1 (High)** | DNS Reliability & Decoupling | **RESOLVED** | `backend/dns_checker.py` | `tests/test_dns.py::test_mx_timeout_with_successful_a_record_decoupling` & `test_live_null_mx_2outlook` |
+| **DEFECT-09** | **P1 (High)** | Input Parsing & Batch Consistency | **RESOLVED** | `src/services/emailParser.ts`, `src/hooks/useAnalysis.ts`, `tests/test_api.py` | `src/__tests__/emailParser.test.ts`, `src/__tests__/api.test.ts`, `tests/test_api.py::test_forty_line_input_consistency_with_malformed_space` |
 
 ---
 
@@ -171,4 +172,44 @@ During this formal pre-release quality gate audit, **7 distinct defects** were i
   - `tests/test_dns.py::test_configured_nameservers_fallback_order`
   - `tests/test_integration_dns.py::test_live_null_mx_2outlook`
 - **Verification Result:** **VERIFIED PASS.** (Verified in unit tests, live API test, and live browser UI test).
+ 
+---
+
+### DEFECT-09: Non-Line Candidate Splitting on Internal Spaces & Batch Size Limit Enforcement
+- **Severity:** P1 — High (Input Parsing & Batch Consistency Defect)
+- **Affected Files:** `src/services/emailParser.ts`, `src/hooks/useAnalysis.ts`, `src/components/EmailInput.tsx`, `src/services/api.ts`, `backend/main.py`, `backend/dns_checker.py`
+- **Reproduction Steps:**
+  1. Input 40 lines of email candidates into the analyzer, including a malformed address with an internal space (`user name@example.com`).
+  2. In the prior implementation, `split(/[\r\n,;\s]+/)` split `user name@example.com` into two candidate items: `"user"` and `"name@example.com"`.
+  3. The analyzer submitted 41 candidates instead of 40, generating an extraneous DNS lookup for `example.com` while treating `"user"` as a separate syntax failure.
+  4. Entering > 200 addresses silently sliced the array without providing a distinct validation error.
+- **Expected Behavior:**
+  1. Each non-empty line must be treated as exactly one candidate.
+  2. Input must be split by newline (`\r\n`, `\n`, `\r`), never by arbitrary whitespace.
+  3. Leading and trailing whitespace must be trimmed, but internal whitespace within an address line must be preserved so that the candidate is evaluated as a single malformed entry and marked syntactically invalid (`likely_to_bounce`).
+  4. Blank lines and trailing newlines must be ignored and not produce phantom candidates.
+  5. The API and frontend must return exactly one result per accepted candidate.
+  6. Invariants must strictly hold: `summary.total == results.length` and `delivered + bounced + unknown == total`.
+  7. Batches exceeding `MAX_EMAIL_BATCH_SIZE` (200) must trigger a clear validation error rather than being silently truncated or duplicated.
+- **Fix Implemented:**
+  1. Updated `src/services/emailParser.ts` to implement line-based parsing with strict newline delimiters (`/\r\n|\r|\n/`), trimming each line, discarding empty lines, and preserving internal whitespace.
+  2. Updated `src/hooks/useAnalysis.ts` to enforce `MAX_EMAIL_BATCH_LIMIT` and present an explicit validation error when the batch limit is exceeded, eliminating misleading client-side chunk loops.
+  3. Updated `src/components/EmailInput.tsx` to clearly communicate one-candidate-per-line input and disable submission when batch limits are exceeded.
+  4. Updated `src/services/api.ts` to strictly maintain the invariant `summary.total === normalizedResults.length` and consistent breakdown counts.
+  5. Updated `backend/dns_checker.py` to catch `dns.name` syntax errors (e.g. `EmptyLabel`, `LabelTooLong`) as `invalid_domain` with `likely_to_bounce` instead of treating them as nameserver failures.
+  6. Added automated regression and unit tests in `src/__tests__/emailParser.test.ts`, `src/__tests__/api.test.ts`, and `tests/test_api.py`.
+- **Regression Tests:**
+  - `src/__tests__/emailParser.test.ts::produces exactly 40 candidates from forty normal lines`
+  - `src/__tests__/emailParser.test.ts::preserves an address containing internal space as one candidate and flags it as syntactically invalid`
+  - `src/__tests__/emailParser.test.ts::trims leading and trailing whitespace from each line`
+  - `src/__tests__/emailParser.test.ts::ignores blank lines and whitespace-only lines`
+  - `src/__tests__/emailParser.test.ts::handles both Windows CRLF and Unix LF line endings consistently`
+  - `src/__tests__/emailParser.test.ts::does not create an additional candidate for a trailing newline`
+  - `src/__tests__/emailParser.test.ts::enforces batch-size limits and flags exceedsLimit when over 200`
+  - `src/__tests__/emailParser.test.ts::preserves the exact count with a mixture of valid and malformed addresses`
+  - `src/__tests__/api.test.ts::maintains exact 1:1 mapping and summary invariants for 40 candidates`
+  - `tests/test_api.py::TestApiEndpoints::test_forty_line_input_consistency_with_malformed_space`
+  - `tests/test_api.py::TestApiEndpoints::test_dns_failures_do_not_cause_extra_or_missing_results`
+- **Verification Result:** **VERIFIED PASS.**
+
 

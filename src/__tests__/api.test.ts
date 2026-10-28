@@ -104,5 +104,68 @@ describe('api service', () => {
         'Payload Too Large'
       );
     });
+
+    // Problem 3.B: API consistency invariants with 40-candidate fixture
+    it('maintains exact 1:1 mapping and summary invariants for 40 candidates', async () => {
+      const candidates = Array.from({ length: 39 }, (_, i) => `user${i + 1}@example.com`);
+      candidates.push('user name@example.com'); // malformed line with internal space
+
+      const mockResults = candidates.map((email, idx) => ({
+        email,
+        normalized_email: email.trim().toLowerCase(),
+        syntax_valid: email !== 'user name@example.com',
+        domain: email === 'user name@example.com' ? '' : 'example.com',
+        domain_status: email === 'user name@example.com' ? 'not_checked' : 'resolved',
+        mx_status: email === 'user name@example.com' ? 'not_checked' : 'present',
+        classification:
+          email === 'user name@example.com'
+            ? 'likely_to_bounce'
+            : idx < 20
+              ? 'likely_to_be_delivered'
+              : 'likely_to_bounce',
+        reason: email === 'user name@example.com' ? 'Syntax validation failed: Address contains unquoted whitespace characters.' : 'Valid routing',
+        diagnostics: {
+          has_mx: email !== 'user name@example.com',
+          has_fallback_a: false,
+          mx_records: email !== 'user name@example.com' ? ['mx.example.com'] : [],
+          is_disposable: false,
+          syntax_error: email === 'user name@example.com' ? 'Address contains unquoted whitespace characters.' : null,
+          response_time_ms: 15.0
+        }
+      }));
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          results: mockResults,
+          summary: {
+            total: 40,
+            likely_to_be_delivered: 20,
+            likely_to_bounce: 20,
+            unknown: 0,
+            duration_ms: 120.0
+          }
+        })
+      } as Response);
+
+      const res = await analyzeEmailsApi(candidates);
+
+      // Invariants
+      expect(res.results.length).toBe(40);
+      expect(res.summary.total).toBe(40);
+      expect(res.summary.total).toBe(res.results.length);
+      expect(
+        res.summary.likely_to_be_delivered +
+        res.summary.likely_to_bounce +
+        res.summary.unknown
+      ).toBe(res.summary.total);
+
+      // Verify malformed line preserved and classified as syntactically invalid
+      const malformedResult = res.results.find((r) => r.email === 'user name@example.com');
+      expect(malformedResult).toBeDefined();
+      expect(malformedResult?.syntax_valid).toBe(false);
+      expect(malformedResult?.classification).toBe('likely_to_bounce');
+      expect(malformedResult?.reason).toContain('Syntax validation failed');
+    });
   });
 });

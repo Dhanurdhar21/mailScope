@@ -149,16 +149,16 @@ function normalizeAnalyzeResponse(raw: any, submittedEmails: string[]): AnalyzeR
     };
   });
 
-  // Calculate actual summary if not fully provided
+  // Calculate authoritative summary metrics ensuring strict invariant: total === results.length === delivered + bounced + unknown
   const delivered = normalizedResults.filter((r) => r.classification === 'likely_to_be_delivered').length;
   const bounced = normalizedResults.filter((r) => r.classification === 'likely_to_bounce').length;
   const unknown = normalizedResults.filter((r) => r.classification === 'unknown').length;
 
   const summary: SummaryMetrics = {
-    total: raw.summary?.total ?? normalizedResults.length,
-    likely_to_be_delivered: raw.summary?.likely_to_be_delivered ?? delivered,
-    likely_to_bounce: raw.summary?.likely_to_bounce ?? bounced,
-    unknown: raw.summary?.unknown ?? unknown,
+    total: normalizedResults.length,
+    likely_to_be_delivered: delivered,
+    likely_to_bounce: bounced,
+    unknown: unknown,
     duration_ms: Number(raw.summary?.duration_ms ?? 0)
   };
 

@@ -163,7 +163,7 @@ export const EmailInput: React.FC<EmailInputProps> = ({
           value={inputText}
           onChange={(e) => onChange(e.target.value)}
           disabled={isAnalyzing}
-          placeholder="Enter addresses (e.g. user@domain.com, team@company.org)... Accepts newlines, commas, semicolons, or spaces"
+          placeholder="Enter addresses (e.g. user@domain.com, team@company.org)... One address per line"
           className={`w-full font-mono text-xs sm:text-sm p-3.5 rounded-xl border transition-all resize-y outline-none leading-relaxed ${
             isOverLimit
               ? 'border-[#FDA29B] focus:ring-2 focus:ring-[#F04438]/20 bg-[#FFFBFA]'
@@ -188,13 +188,13 @@ export const EmailInput: React.FC<EmailInputProps> = ({
             {isOverLimit && (
               <span className="inline-flex items-center gap-1 text-[#B42318] bg-[#FEF3F2] border border-[#FECDCA] px-2 py-0.5 rounded-full text-[11px] font-medium">
                 <AlertCircle className="w-3 h-3 text-[#F04438]" />
-                Batch capped to {parsed.maxLimit} max
+                Batch limit exceeded ({parsed.maxLimit} max)
               </span>
             )}
           </div>
 
           <div className="text-[11px] text-[#98A2B3] hidden md:block">
-            Supports newlines, commas, semicolons, and spaces
+            One address per line (preserves malformed candidates)
           </div>
         </div>
       </div>
@@ -204,7 +204,7 @@ export const EmailInput: React.FC<EmailInputProps> = ({
         <div className="mt-2.5 p-2.5 rounded-xl bg-[#FEF3F2] border border-[#FECDCA] text-xs text-[#B42318] flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>
-            Input contains {parsed.allEntries.length} addresses. The analyzer processes a maximum of {parsed.maxLimit} addresses per batch to guarantee stable DNS lookup performance.
+            Input contains {parsed.allEntries.length} addresses. The analyzer processes a maximum of {parsed.maxLimit} addresses per batch. Please reduce your input to proceed.
           </span>
         </div>
       )}
@@ -221,7 +221,7 @@ export const EmailInput: React.FC<EmailInputProps> = ({
           variant="primary"
           onClick={onAnalyze}
           isLoading={isAnalyzing}
-          disabled={count === 0 || isAnalyzing}
+          disabled={count === 0 || isAnalyzing || isOverLimit}
           icon={<Play className="w-4 h-4 fill-current" />}
           className="self-end sm:self-auto min-w-[160px] shadow-sm hover:shadow-md"
         >

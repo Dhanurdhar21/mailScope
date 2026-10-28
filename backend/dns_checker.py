@@ -11,6 +11,7 @@ import asyncio
 import dns.asyncresolver
 import dns.resolver
 import dns.exception
+import dns.name
 from backend.config import (
     DNS_NAMESERVERS,
     DNS_FALLBACK_NAMESERVERS,
@@ -130,8 +131,25 @@ async def inspect_domain_dns(
         mx_status_code = "timeout"
     except (dns.resolver.NoNameservers, dns.resolver.LifetimeTimeout):
         mx_status_code = "temporary_error"
+    except (dns.name.EmptyLabel, dns.name.LabelTooLong, dns.name.NameTooLong, dns.name.BadLabelType):
+        mx_status_code = "invalid_domain"
     except Exception:
         mx_status_code = "temporary_error"
+
+    # Definite MX outcome 0: Invalid DNS domain label or syntax
+    if mx_status_code == "invalid_domain":
+        duration_ms = round((time.time() - start_time) * 1000, 2)
+        return DomainDnsResult(
+            domain=clean_domain,
+            domain_status="nonexistent",
+            mx_status="none",
+            classification="likely_to_bounce",
+            reason=f"Domain '{clean_domain}' has an invalid DNS domain format.",
+            has_mx=False,
+            has_fallback_a=False,
+            mx_records=[],
+            response_time_ms=duration_ms
+        )
 
     # Definite MX outcome 1: Confirmed RFC 7505 Null MX (domain explicitly refuses email)
     if mx_status_code == "null_mx":
@@ -198,6 +216,8 @@ async def inspect_domain_dns(
             has_fallback_a = True
     except dns.resolver.NXDOMAIN:
         a_nxdomain = True
+    except (dns.name.EmptyLabel, dns.name.LabelTooLong, dns.name.NameTooLong, dns.name.BadLabelType):
+        a_nxdomain = True
     except dns.resolver.NoAnswer:
         pass
     except (dns.exception.Timeout, dns.resolver.LifetimeTimeout):
@@ -214,6 +234,8 @@ async def inspect_domain_dns(
             if aaaa_answers:
                 has_fallback_aaaa = True
         except dns.resolver.NXDOMAIN:
+            a_nxdomain = True
+        except (dns.name.EmptyLabel, dns.name.LabelTooLong, dns.name.NameTooLong, dns.name.BadLabelType):
             a_nxdomain = True
         except dns.resolver.NoAnswer:
             pass

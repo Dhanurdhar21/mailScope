@@ -273,3 +273,144 @@ class TestApiEndpoints:
                     summary["unknown"]
                 )
 
+    async def test_forty_line_input_consistency_with_malformed_space(self):
+        """
+        Problem 3.B Validation:
+        Forty candidates (including the malformed line 'user name@example.com'):
+        - Submits 40 candidates, API returns 40 corresponding results.
+        - Summary reports total = 40 == results.length.
+        - Summary breakdown adds up exactly: delivered + bounce + unknown == total.
+        - Candidate 'user name@example.com' remains one candidate and is classified as syntactically invalid.
+        - Preserves strict 1:1 order and candidate relationship without accidental duplicates.
+        """
+        emails = [f"candidate{i + 1}@example.com" for i in range(39)]
+        emails.insert(15, "user name@example.com") # 40 total
+
+        transport = ASGITransport(app=app)
+
+        with patch("backend.main.BatchDomainResolver.resolve", new_callable=AsyncMock) as mock_dns:
+            mock_res = MagicMock(
+                domain_status="resolved",
+                mx_status="present",
+                classification="likely_to_be_delivered",
+                reason="Domain resolves with active MX.",
+                has_mx=True,
+                has_fallback_a=False,
+                mx_records=["mail.example.com (priority: 10)"],
+                response_time_ms=1.5
+            )
+            mock_dns.return_value = mock_res
+
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                res = await client.post("/api/analyze", json={"emails": emails})
+                assert res.status_code == 200
+                data = res.json()
+
+                results = data["results"]
+                summary = data["summary"]
+
+                # 1. Total results equals accepted input candidates
+                assert len(results) == 40
+                assert summary["total"] == 40
+                assert summary["total"] == len(results)
+
+                # 2. Strict 1:1 candidate-to-result correspondence
+                assert [r["email"] for r in results] == emails
+
+                # 3. Sum of classification counts equals summary.total
+                assert (
+                    summary["likely_to_be_delivered"] +
+                    summary["likely_to_bounce"] +
+                    summary["unknown"]
+                ) == summary["total"]
+
+                # 4. Malformed line with internal space is preserved as one candidate and marked syntactically invalid
+                malformed = results[15]
+                assert malformed["email"] == "user name@example.com"
+                assert malformed["syntax_valid"] is False
+                assert malformed["classification"] == "likely_to_bounce"
+                assert "whitespace" in malformed["reason"].lower()
+                assert malformed["domain_status"] == "not_checked"
+                assert malformed["mx_status"] == "not_checked"
+
+    async def test_dns_failures_do_not_cause_extra_or_missing_results(self):
+        """
+        Problem 3.B:
+        DNS failures (timeout, servfail, nxdomain) do not cause extra or missing results.
+        Every submitted email gets exactly one result.
+        """
+        emails = [
+            "user1@healthy.com",
+            "user2@timeout.com",
+            "user3@servfail.com",
+            "user4@nxdomain.com",
+            "user5@syntax-fail"
+        ]
+
+        transport = ASGITransport(app=app)
+
+        async def mock_resolve(domain):
+            if domain == "healthy.com":
+                return MagicMock(
+                    domain_status="resolved",
+                    mx_status="present",
+                    classification="likely_to_be_delivered",
+                    reason="Active MX",
+                    has_mx=True,
+                    has_fallback_a=False,
+                    mx_records=["mx.healthy.com"],
+                    response_time_ms=1.0
+                )
+            elif domain == "timeout.com":
+                return MagicMock(
+                    domain_status="timeout",
+                    mx_status="timeout",
+                    classification="unknown",
+                    reason="Query timed out",
+                    has_mx=False,
+                    has_fallback_a=False,
+                    mx_records=[],
+                    response_time_ms=5.0
+                )
+            elif domain == "servfail.com":
+                return MagicMock(
+                    domain_status="unknown",
+                    mx_status="unknown",
+                    classification="unknown",
+                    reason="SERVFAIL",
+                    has_mx=False,
+                    has_fallback_a=False,
+                    mx_records=[],
+                    response_time_ms=2.0
+                )
+            elif domain == "nxdomain.com":
+                return MagicMock(
+                    domain_status="nonexistent",
+                    mx_status="none",
+                    classification="likely_to_bounce",
+                    reason="NXDOMAIN",
+                    has_mx=False,
+                    has_fallback_a=False,
+                    mx_records=[],
+                    response_time_ms=1.5
+                )
+
+        with patch("backend.main.BatchDomainResolver.resolve", side_effect=mock_resolve):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                res = await client.post("/api/analyze", json={"emails": emails})
+                assert res.status_code == 200
+                data = res.json()
+
+                results = data["results"]
+                summary = data["summary"]
+
+                assert len(results) == 5
+                assert summary["total"] == 5
+                assert [r["email"] for r in results] == emails
+                assert (
+                    summary["likely_to_be_delivered"] +
+                    summary["likely_to_bounce"] +
+                    summary["unknown"]
+                ) == summary["total"]
+
+

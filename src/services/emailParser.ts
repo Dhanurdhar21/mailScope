@@ -44,11 +44,18 @@ export function parseEmailInput(
     };
   }
 
-  // Split on newlines, commas, semicolons, or multiple whitespace characters
-  const rawTokens = rawInput
-    .split(/[\r\n,;\s]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+  // Split strictly by newline sequences (CRLF, LF, CR)
+  const lines = rawInput.split(/\r\n|\r|\n/);
+
+  // Each non-empty line after trimming leading and trailing whitespace is one candidate.
+  // Internal spaces are preserved so malformed candidates can be evaluated for syntax validity.
+  const rawTokens: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) {
+      rawTokens.push(trimmed);
+    }
+  }
 
   const seen = new Set<string>();
   const duplicateMap: Record<string, number> = {};
@@ -69,7 +76,7 @@ export function parseEmailInput(
 
   return {
     allEntries: rawTokens,
-    uniqueEmails: uniqueEmails.slice(0, maxLimit),
+    uniqueEmails,
     duplicateCount,
     duplicateMap,
     exceedsLimit,

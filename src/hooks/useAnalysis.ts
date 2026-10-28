@@ -6,7 +6,7 @@ import type {
   TimelineStage
 } from '../types/analysis';
 import type { StoredAnalysisBatch } from '../types/history';
-import { parseEmailInput, SAMPLE_EMAILS } from '../services/emailParser';
+import { parseEmailInput, SAMPLE_EMAILS, MAX_EMAIL_BATCH_LIMIT } from '../services/emailParser';
 import type { ParsedEmailResult } from '../services/emailParser';
 import { analyzeEmailsApi } from '../services/api';
 import { historyStorage } from '../services/historyStorage';
@@ -137,10 +137,17 @@ export function useAnalysis() {
     );
   }, [resetAnalysis]);
 
-  // Run analysis (with automatic sequential chunking for batches > 200)
+  // Run analysis for candidate email batch
   const runAnalysis = useCallback(async () => {
     const emails = parsedInput.uniqueEmails;
     if (emails.length === 0 || isAnalyzing) {
+      return;
+    }
+
+    if (parsedInput.exceedsLimit || emails.length > MAX_EMAIL_BATCH_LIMIT) {
+      setAnalysisError(
+        `Batch size of ${emails.length} exceeds maximum allowed limit of ${MAX_EMAIL_BATCH_LIMIT} addresses.`
+      );
       return;
     }
 
@@ -164,9 +171,6 @@ export function useAnalysis() {
       setElapsedTimeMs(Date.now() - startTime);
     }, 80);
 
-    const CHUNK_SIZE = 200;
-    const chunkCount = Math.ceil(emails.length / CHUNK_SIZE);
-
     // Initial stage update: Stage 1 completed
     setStages((prev) =>
       prev.map((stage) => {
@@ -174,52 +178,29 @@ export function useAnalysis() {
           return {
             ...stage,
             status: 'completed',
-            note: `Accepted ${emails.length} unique address(es)${chunkCount > 1 ? ` across ${chunkCount} chunks` : ''}`
+            note: `Accepted ${emails.length} address candidate(s)`
           };
         }
         if (stage.id >= 2 && stage.id <= 5) {
           return {
             ...stage,
             status: 'in_progress',
-            note: chunkCount > 1 ? `Processing chunk 1 of ${chunkCount}...` : 'Analysis pipeline in progress...'
+            note: 'Analysis pipeline in progress...'
           };
         }
         return { ...stage, status: 'pending', note: undefined };
       })
     );
 
-    const aggregatedResults: EmailAnalysisResult[] = [];
-    let totalApiDurationMs = 0;
-
     try {
-      for (let c = 0; c < chunkCount; c++) {
-        const chunkEmails = emails.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
-
-        if (chunkCount > 1) {
-          setStages((prev) =>
-            prev.map((stage) => {
-              if (stage.id >= 2 && stage.id <= 5) {
-                return {
-                  ...stage,
-                  status: 'in_progress',
-                  note: `Analyzing chunk ${c + 1} of ${chunkCount} (${aggregatedResults.length}/${emails.length} addresses processed)...`
-                };
-              }
-              return stage;
-            })
-          );
-        }
-
-        const chunkResponse = await analyzeEmailsApi(chunkEmails, abortController.signal);
-        aggregatedResults.push(...chunkResponse.results);
-        totalApiDurationMs += chunkResponse.summary.duration_ms || 0;
-      }
+      const apiResponse = await analyzeEmailsApi(emails, abortController.signal);
+      const aggregatedResults = apiResponse.results;
 
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
       }
 
-      const totalDuration = totalApiDurationMs || (Date.now() - startTime);
+      const totalDuration = apiResponse.summary.duration_ms || (Date.now() - startTime);
       setElapsedTimeMs(totalDuration);
 
       // Compute combined summary
@@ -316,31 +297,7 @@ export function useAnalysis() {
       }
 
       const message = err.message || 'An error occurred during deliverability analysis.';
-      
-      // If we got partial results from completed chunks, keep them
-      if (aggregatedResults.length > 0) {
-        const delivered = aggregatedResults.filter((r) => r.classification === 'likely_to_be_delivered').length;
-        const bounce = aggregatedResults.filter((r) => r.classification === 'likely_to_bounce').length;
-        const unknown = aggregatedResults.filter((r) => r.classification === 'unknown').length;
-        const partialResponse: AnalyzeResponse = {
-          results: aggregatedResults,
-          summary: {
-            total: aggregatedResults.length,
-            total_emails: aggregatedResults.length,
-            likely_to_be_delivered: delivered,
-            likely_to_bounce: bounce,
-            unknown: unknown,
-            deliverability_percentage: Number(((delivered / aggregatedResults.length) * 100).toFixed(1)),
-            duration_ms: totalApiDurationMs || (Date.now() - startTime)
-          }
-        };
-        setAnalysisResponse(partialResponse);
-        setAnalysisError(
-          `Analysis partially completed: ${aggregatedResults.length} of ${emails.length} addresses processed. Network error: ${message}`
-        );
-      } else {
-        setAnalysisError(message);
-      }
+      setAnalysisError(message);
 
       // Mark in-progress stages as failed
       setStages((prev) =>

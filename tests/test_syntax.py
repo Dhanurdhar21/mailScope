@@ -37,6 +37,10 @@ class TestEmailSyntax:
         assert not validate_email_syntax("   ").is_valid
         assert not validate_email_syntax("user @example.com").is_valid
         assert not validate_email_syntax("user@ example.com").is_valid
+        res_space = validate_email_syntax("user name@example.com")
+        assert not res_space.is_valid
+        assert "whitespace" in res_space.error_reason.lower()
+        assert res_space.normalized_email == "user name@example.com"
 
     def test_missing_delimiter_or_parts(self):
         # Missing @
